@@ -18,59 +18,64 @@
 
     <main class="frame">
       <header class="bar">
-        <div class="logo">
-          <span class="logo-bracket">[</span>
-          <span class="logo-text" data-text="GEMMA//4">GEMMA//4</span>
-          <span class="logo-bracket">]</span>
+        <div class="bar-line">
+          <div class="logo">
+            <span class="logo-bracket">[</span>
+            <span class="logo-text" data-text="GEMMA//4">GEMMA//4</span>
+            <span class="logo-bracket">]</span>
+          </div>
+          <div class="mode-switch" role="tablist" aria-label="mode">
+            <button type="button" class="mode-btn" data-mode="chat" aria-pressed="true">CHAT</button>
+            <button type="button" class="mode-btn" data-mode="video" aria-pressed="false">VIDEO</button>
+          </div>
+          <div class="bar-spacer"></div>
+          <div class="status">
+            <span class="dot"></span>
+            <span id="status-text">LINK // IDLE</span>
+          </div>
+          <button type="button" id="think-toggle" class="toggle" aria-pressed="false" title="Toggle deep reasoning">
+            <span class="toggle-dot"></span><span>THINK</span>
+          </button>
+          <button type="button" id="tools-toggle" class="toggle" aria-pressed="false" title="Allow Gemma to request shell commands (you approve each one)">
+            <span class="toggle-dot"></span><span>TOOLS</span>
+          </button>
+          <button type="button" id="clear" class="clear" title="Purge / clear feed">PURGE</button>
         </div>
-        <div class="mode-switch" role="tablist" aria-label="mode">
-          <button type="button" class="mode-btn" data-mode="chat" aria-pressed="true">CHAT</button>
-          <button type="button" class="mode-btn" data-mode="video" aria-pressed="false">VIDEO</button>
+        <div class="bar-line bar-line-selects">
+          <div class="model-selects">
+            <label class="model-select">
+              <span>EMMA</span>
+              <select id="select-emma"></select>
+            </label>
+            <label class="model-select">
+              <span>SCAN</span>
+              <select id="select-scan"></select>
+            </label>
+            <label class="model-select">
+              <span>DETECT</span>
+              <select id="select-detector"></select>
+            </label>
+            <label class="model-select">
+              <span>SEGMENT</span>
+              <select id="select-segmenter"></select>
+            </label>
+            <label class="model-select">
+              <span>INPAINT</span>
+              <select id="select-inpaint"></select>
+            </label>
+            <label class="model-select">
+              <span>RES</span>
+              <select id="select-resolution">
+                <option value="320">320 px (fastest)</option>
+                <option value="384">384 px</option>
+                <option value="480" selected>480 px</option>
+                <option value="640">640 px</option>
+                <option value="768">768 px (sharp)</option>
+              </select>
+            </label>
+          </div>
+          <div class="model" id="model-name">--</div>
         </div>
-        <div class="model-selects">
-          <label class="model-select">
-            <span>EMMA</span>
-            <select id="select-emma"></select>
-          </label>
-          <label class="model-select">
-            <span>SCAN</span>
-            <select id="select-scan"></select>
-          </label>
-          <label class="model-select">
-            <span>DETECT</span>
-            <select id="select-detector"></select>
-          </label>
-          <label class="model-select">
-            <span>SEGMENT</span>
-            <select id="select-segmenter"></select>
-          </label>
-          <label class="model-select">
-            <span>INPAINT</span>
-            <select id="select-inpaint"></select>
-          </label>
-          <label class="model-select">
-            <span>RES</span>
-            <select id="select-resolution">
-              <option value="320">320 px (fastest)</option>
-              <option value="384">384 px</option>
-              <option value="480" selected>480 px</option>
-              <option value="640">640 px</option>
-              <option value="768">768 px (sharp)</option>
-            </select>
-          </label>
-        </div>
-        <div class="status">
-          <span class="dot"></span>
-          <span id="status-text">LINK // IDLE</span>
-        </div>
-        <div class="model" id="model-name">--</div>
-        <button type="button" id="think-toggle" class="toggle" aria-pressed="false" title="Toggle deep reasoning">
-          <span class="toggle-dot"></span><span>THINK</span>
-        </button>
-        <button type="button" id="tools-toggle" class="toggle" aria-pressed="false" title="Allow Gemma to request shell commands (you approve each one)">
-          <span class="toggle-dot"></span><span>TOOLS</span>
-        </button>
-        <button type="button" id="clear" class="clear" title="Purge / clear feed">PURGE</button>
       </header>
 
       <section id="log" class="log" aria-live="polite"></section>

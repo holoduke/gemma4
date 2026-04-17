@@ -139,9 +139,8 @@ body.mode-video .bar-mini { width: 24px; }
 
 .bar {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 16px;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 18px;
   background: var(--panel);
   border: 1px solid var(--panel-edge);
@@ -157,6 +156,17 @@ body.mode-video .bar-mini { width: 24px; }
 }
 .mode-switch { flex-shrink: 0; }
 .model-selects { flex: 1 1 auto; min-width: 0; }
+
+.bar-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+.bar-spacer { flex: 1 1 auto; }  /* pushes status/toggles to the right on line 1 */
+.bar-line-selects .model { margin-left: auto; }
+
+.status { margin-left: 0; }  /* override old margin-left:auto now that spacer does the job */
 
 .logo {
   font-family: "Orbitron", sans-serif;
