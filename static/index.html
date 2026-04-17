@@ -48,6 +48,16 @@
             <span>INPAINT</span>
             <select id="select-inpaint"></select>
           </label>
+          <label class="model-select">
+            <span>RES</span>
+            <select id="select-resolution">
+              <option value="320">320 px (fastest)</option>
+              <option value="384">384 px</option>
+              <option value="480" selected>480 px</option>
+              <option value="640">640 px</option>
+              <option value="768">768 px (sharp)</option>
+            </select>
+          </label>
         </div>
         <div class="status">
           <span class="dot"></span>
@@ -65,15 +75,17 @@
 
       <section id="log" class="log" aria-live="polite"></section>
 
-      <section id="cam-view" class="cam-view">
-        <div class="cam-title">// VISUAL INPUT</div>
+      <section id="cam-video-panel" class="cam-video-panel">
         <div class="cam-video-wrap">
           <video id="cam-video" autoplay muted playsinline></video>
           <canvas id="cam-canvas"></canvas>
           <div id="cam-labels" class="cam-labels"></div>
         </div>
+      </section>
+
+      <section id="cam-view" class="cam-view">
+        <div class="cam-title">// CONTROLS</div>
         <div class="cam-controls">
-          <button type="button" id="cam-snap" class="mini-btn">SNAP</button>
           <button type="button" id="cam-live" class="mini-btn toggle-mini" aria-pressed="false">LIVE</button>
           <button type="button" id="cam-scan" class="mini-btn" title="Detect objects in current frame with Gemma">SCAN</button>
           <button type="button" id="cam-scan-auto" class="mini-btn toggle-mini" aria-pressed="false" title="Re-scan every N seconds (shares the LIVE interval)">AUTO</button>

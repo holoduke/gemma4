@@ -498,7 +498,6 @@ inputEl.addEventListener("paste", async (e) => {
 
 /* ---------- webcam ---------- */
 const camVideo = document.getElementById("cam-video");
-const camSnap = document.getElementById("cam-snap");
 const camLive = document.getElementById("cam-live");
 const camInterval = document.getElementById("cam-interval");
 const camIntervalVal = document.getElementById("cam-interval-val");
@@ -572,7 +571,19 @@ function stopCam() {
   camVideo.srcObject = null;
 }
 
-const FRAME_SIZE = 480;
+let FRAME_SIZE = parseInt(localStorage.getItem("emma4.resolution") || "480", 10);
+const selResolution = document.getElementById("select-resolution");
+if (selResolution) {
+  selResolution.value = String(FRAME_SIZE);
+  selResolution.addEventListener("change", (e) => {
+    FRAME_SIZE = parseInt(e.target.value, 10);
+    localStorage.setItem("emma4.resolution", String(FRAME_SIZE));
+    // Invalidate reusable capture canvas so it re-sizes to the new dims.
+    _captureCanvas.canvas = null;
+    _captureCanvas.cw = 0;
+    _captureCanvas.ch = 0;
+  });
+}
 
 function setStat(id, text) {
   const el = document.getElementById(id);
@@ -598,15 +609,6 @@ async function captureFrame(max = FRAME_SIZE, quality = 0.7) {
   const buf = await blob.arrayBuffer();
   return _bytesToBase64(new Uint8Array(buf));
 }
-
-async function snapAndAttach() {
-  const b = await captureFrame(FRAME_SIZE, 0.82);
-  if (!b) return;
-  pending.images.push(b);
-  renderAttachStrip();
-}
-
-camSnap.addEventListener("click", snapAndAttach);
 
 function appendFeed(text, kind = "info") {
   const line = document.createElement("div");
@@ -985,17 +987,15 @@ let lastScanObjects = [];
 function renderChips(objects) {
   lastScanObjects = objects.slice();
   scanChips.innerHTML = "";
-  // Drop scan-derived selections that aren't in the new batch; keep custom.
-  const fresh = new Set(objects);
-  for (const o of Array.from(selected)) {
-    if (!fresh.has(o) && !customTags.has(o)) selected.delete(o);
-  }
-  if (!autoTrackPrimed && objects.length > 0 && scanTimer) {
-    objects.forEach((o) => selected.add(o));
-    autoTrackPrimed = true;
-  }
+  // Everything visible as a chip is tracked and shown in the input.
+  selected.clear();
+  for (const o of objects) selected.add(o);
+  for (const t of customTags) selected.add(t);
+  autoTrackPrimed = true;
+
   syncInputFromSelection();
   if (selected.size && !trackTimer && camStream) startTrack();
+  if (!selected.size && trackTimer) stopTrack();
 
   if (!objects.length && !customTags.size) {
     scanChips.hidden = true;
@@ -1147,7 +1147,7 @@ async function runReplace() {
         height: det.h,
         steps: 4,
         guidance: 4.0,
-        max_size: 640,
+        max_size: FRAME_SIZE,
         feather: 11,
       }),
     });

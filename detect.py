@@ -54,11 +54,20 @@ DETECTOR_PRESETS: dict[str, dict] = {
 }
 
 SEGMENTER_PRESETS: dict[str, dict] = {
-    "mobile_sam.pt":  {"kind": "sam", "weights": "mobile_sam.pt",  "label": "MobileSAM (fast)"},
+    # ---- Fastest first ----
+    "mobile_sam.pt":  {"kind": "sam", "weights": "mobile_sam.pt",  "label": "MobileSAM (fastest)"},
     "FastSAM-s.pt":   {"kind": "fast_sam", "weights": "FastSAM-s.pt", "label": "FastSAM s"},
-    "FastSAM-x.pt":   {"kind": "fast_sam", "weights": "FastSAM-x.pt", "label": "FastSAM x"},
     "sam2_t.pt":      {"kind": "sam", "weights": "sam2_t.pt", "label": "SAM2 tiny"},
+    "sam2.1_t.pt":    {"kind": "sam", "weights": "sam2.1_t.pt", "label": "SAM2.1 tiny"},
     "sam2_s.pt":      {"kind": "sam", "weights": "sam2_s.pt", "label": "SAM2 small"},
+    "sam2.1_s.pt":    {"kind": "sam", "weights": "sam2.1_s.pt", "label": "SAM2.1 small"},
+    # ---- Heavier, better masks ----
+    "sam_b.pt":       {"kind": "sam", "weights": "sam_b.pt", "label": "SAM1 base (slow)"},
+    "sam2_b.pt":      {"kind": "sam", "weights": "sam2_b.pt", "label": "SAM2 base"},
+    "sam2.1_b.pt":    {"kind": "sam", "weights": "sam2.1_b.pt", "label": "SAM2.1 base"},
+    "FastSAM-x.pt":   {"kind": "fast_sam", "weights": "FastSAM-x.pt", "label": "FastSAM x"},
+    "sam_l.pt":       {"kind": "sam", "weights": "sam_l.pt", "label": "SAM1 large (slow)"},
+    "sam2.1_l.pt":    {"kind": "sam", "weights": "sam2.1_l.pt", "label": "SAM2.1 large"},
 }
 
 

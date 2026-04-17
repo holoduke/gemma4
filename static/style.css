@@ -75,7 +75,8 @@ body {
 .log             { grid-area: log; }
 .composer        { grid-area: input; }
 .stats           { grid-area: stats; }
-.cam-view        { grid-area: cam; }
+.cam-video-panel { grid-area: video; }
+.cam-view        { grid-area: controls; }
 .cam-feed-panel  { grid-area: feed; }
 
 /* ---------- CHAT MODE ---------- */
@@ -87,22 +88,34 @@ body.mode-chat .frame {
     "log    stats"
     "input  stats";
 }
+body.mode-chat .cam-video-panel,
 body.mode-chat .cam-view,
 body.mode-chat .cam-feed-panel { display: none; }
 
 /* ---------- VIDEO MODE ---------- */
 body.mode-video .frame {
-  grid-template-columns: 1fr 360px;
+  grid-template-columns: 300px 1fr 340px;
   grid-template-rows: auto 1fr auto;
   grid-template-areas:
-    "bar    bar"
-    "cam    feed"
-    "stats  feed";
+    "bar       bar     bar"
+    "controls  video   feed"
+    "controls  stats   feed";
 }
 body.mode-video .log,
 body.mode-video .composer { display: none; }
-body.mode-video .cam-view { max-width: none; }
-body.mode-video .cam-video-wrap { max-height: 70vh; }
+body.mode-video .cam-video-panel {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  clip-path: none;
+  min-height: 0;
+}
+body.mode-video .cam-video-wrap { max-height: 80vh; }
+body.mode-video .cam-view {
+  overflow-y: auto;
+  max-height: calc(100vh - 120px);
+}
 body.mode-video .stats {
   /* compact telemetry grid — wraps into multiple rows on narrow widths */
   display: grid;
@@ -628,7 +641,8 @@ body.mode-video .bar-mini { width: 24px; }
 }
 
 .cam-view,
-.cam-feed-panel {
+.cam-feed-panel,
+.cam-video-panel {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -888,10 +902,11 @@ body.mode-video .bar-mini { width: 24px; }
   background: rgba(0, 0, 0, 0.3);
   color: var(--text);
   border: 1px solid rgba(0, 240, 255, 0.35);
-  padding: 6px 8px;
+  padding: 8px 10px;
   font-family: inherit;
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 128px;
   outline: none;
   resize: vertical;
   clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);

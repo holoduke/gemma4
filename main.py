@@ -12,9 +12,15 @@ from fastapi.staticfiles import StaticFiles
 
 import detect as detect_module
 import logging_setup
+import mlx_client
 import stats as sysstats
 from config import settings
 from ollama_client import OllamaError, client
+
+
+def _dispatch(model_name: str):
+    """Pick the right chat backend based on model name prefix."""
+    return mlx_client if mlx_client.is_mlx_name(model_name) else client
 from schemas import (
     ChatRequest,
     ChatResponse,
@@ -124,10 +130,11 @@ async def chat(request: ChatRequest) -> ChatResponse:
     model = request.model or _STATE["emma"]
     msgs = [m.model_dump(exclude_none=True) for m in request.messages]
     n_msgs, n_chars = _prompt_stats(msgs)
-    log.info(f"/chat <- model={model} msgs={n_msgs} chars={n_chars} think={request.think} tools={bool(request.tools)}")
+    backend = _dispatch(model)
+    log.info(f"/chat <- model={model} msgs={n_msgs} chars={n_chars} think={request.think} tools={bool(request.tools)} backend={'mlx' if backend is mlx_client else 'ollama'}")
     t0 = time.perf_counter()
     try:
-        raw = await client.chat(
+        raw = await backend.chat(
             model=model,
             messages=msgs,
             temperature=request.temperature,
@@ -138,6 +145,9 @@ async def chat(request: ChatRequest) -> ChatResponse:
     except OllamaError as err:
         log.error(f"/chat !! {err}")
         raise HTTPException(status_code=502, detail=str(err)) from err
+    except Exception as err:
+        log.error(f"/chat !! {err}")
+        raise HTTPException(status_code=500, detail=str(err)) from err
 
     wall = time.perf_counter() - t0
     msg = raw.get("message", {})
@@ -169,14 +179,15 @@ async def chat_stream(request: ChatRequest):
     model = request.model or _STATE["emma"]
     msgs = [m.model_dump(exclude_none=True) for m in request.messages]
     n_msgs, n_chars = _prompt_stats(msgs)
-    log.info(f"/chat/stream <- model={model} msgs={n_msgs} chars={n_chars} think={request.think}")
+    backend = _dispatch(model)
+    log.info(f"/chat/stream <- model={model} msgs={n_msgs} chars={n_chars} think={request.think} backend={'mlx' if backend is mlx_client else 'ollama'}")
 
     async def event_stream():
         t0 = time.perf_counter()
         ttft = None
         final = None
         try:
-            async for chunk in client.chat_stream(
+            async for chunk in backend.chat_stream(
                 model=model,
                 messages=msgs,
                 temperature=request.temperature,
@@ -262,9 +273,11 @@ async def scan_endpoint(request: ScanRequest) -> ScanResponse:
     else:
         body = _DEFAULT_SCAN_TEMPLATE.format(max_objects=request.max_objects)
     prompt = body + _SCAN_JSON_SUFFIX
+    scan_model = _STATE["scan"]
+    backend = _dispatch(scan_model)
     try:
-        raw = await client.chat(
-            model=_STATE["scan"],
+        raw = await backend.chat(
+            model=scan_model,
             messages=[{"role": "user", "content": prompt, "images": [request.image]}],
             temperature=0.0,
             max_tokens=150,
@@ -274,6 +287,9 @@ async def scan_endpoint(request: ScanRequest) -> ScanResponse:
     except OllamaError as err:
         log.error(f"/scan !! {err}")
         raise HTTPException(status_code=502, detail=str(err)) from err
+    except Exception as err:
+        log.error(f"/scan !! {err}")
+        raise HTTPException(status_code=500, detail=str(err)) from err
 
     content = (raw.get("message", {}).get("content", "") or "").strip()
     parsed = _parse_json_loose(content)
@@ -330,6 +346,12 @@ async def list_models_endpoint() -> dict:
     except Exception as err:
         log.warning(f"/models: ollama list failed: {err}")
         all_models = []
+    # Add MLX presets alongside Ollama models.
+    try:
+        mlx_raw = await mlx_client.list_models()
+        all_models = all_models + (mlx_raw.get("models") or [])
+    except Exception as err:
+        log.warning(f"/models: mlx list failed: {err}")
     available = []
     for m in all_models:
         size_gb = round(m.get("size", 0) / 1024**3, 2)
@@ -359,8 +381,9 @@ async def list_models_endpoint() -> dict:
 
 @app.post("/models/emma")
 async def set_emma(req: SetModelRequest) -> dict:
+    backend = _dispatch(req.name)
     try:
-        await client.generate(model=req.name, prompt="ok", temperature=0.0, max_tokens=1)
+        await backend.generate(model=req.name, prompt="ok", temperature=0.0, max_tokens=1)
     except Exception as err:
         raise HTTPException(status_code=400, detail=f"model '{req.name}' unavailable: {err}") from err
     _STATE["emma"] = req.name
@@ -370,8 +393,9 @@ async def set_emma(req: SetModelRequest) -> dict:
 
 @app.post("/models/scan")
 async def set_scan(req: SetModelRequest) -> dict:
+    backend = _dispatch(req.name)
     try:
-        await client.generate(model=req.name, prompt="ok", temperature=0.0, max_tokens=1)
+        await backend.generate(model=req.name, prompt="ok", temperature=0.0, max_tokens=1)
     except Exception as err:
         raise HTTPException(status_code=400, detail=f"model '{req.name}' unavailable: {err}") from err
     _STATE["scan"] = req.name
