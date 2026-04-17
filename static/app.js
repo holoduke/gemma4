@@ -682,6 +682,7 @@ function stopCam() {
   if (typeof stopScanAuto === "function") stopScanAuto();
   if (typeof stopPose === "function") stopPose();
   if (typeof stopFace === "function") stopFace();
+  if (typeof stopPeople === "function") stopPeople();
   autoTrackPrimed = false;
   if (camResizeObserver) {
     camResizeObserver.disconnect();
@@ -929,14 +930,14 @@ function clearOverlay() {
 }
 
 // Shared overlay state so TRACK / POSE / FACE can all composite on the same canvas.
-const overlay = { detect: null, pose: null, face: null };
+const overlay = { detect: null, pose: null, face: null, people: null };
 function clearOverlayState(which) {
   if (which) overlay[which] = null;
-  else { overlay.detect = null; overlay.pose = null; overlay.face = null; }
+  else { overlay.detect = null; overlay.pose = null; overlay.face = null; overlay.people = null; }
 }
 
 function drawOverlay() {
-  const srcs = [overlay.detect, overlay.pose, overlay.face].filter(Boolean);
+  const srcs = [overlay.detect, overlay.pose, overlay.face, overlay.people].filter(Boolean);
   if (!srcs.length) { clearOverlay(); return; }
   const cw = Math.max(...srcs.map((s) => s.w || 0));
   const ch = Math.max(...srcs.map((s) => s.h || 0));
@@ -945,9 +946,30 @@ function drawOverlay() {
   const ctx = camCanvas.getContext("2d");
   ctx.clearRect(0, 0, cw, ch);
   camLabels.innerHTML = "";
+  // Draw people mat first so detections/skeleton/face sit on top.
+  if (overlay.people) _drawPeopleOn(ctx, overlay.people);
   if (overlay.detect) _drawDetectionsOn(ctx, overlay.detect, cw, ch);
   if (overlay.pose)   _drawPoseOn(ctx, overlay.pose);
   if (overlay.face)   _drawFaceOn(ctx, overlay.face);
+}
+
+function _drawPeopleOn(ctx, data) {
+  if (!data.polygons || !data.polygons.length) return;
+  ctx.fillStyle = "rgba(57, 255, 20, 0.18)";  // neon green tint
+  ctx.strokeStyle = "#39ff14";
+  ctx.lineWidth = 2;
+  ctx.shadowColor = "#39ff14";
+  ctx.shadowBlur = 10;
+  for (const poly of data.polygons) {
+    if (poly.length < 3) continue;
+    ctx.beginPath();
+    ctx.moveTo(poly[0][0], poly[0][1]);
+    for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
 }
 
 function _drawPoseOn(ctx, data) {
@@ -1696,6 +1718,54 @@ function stopFace() {
 
 poseBtnEl.addEventListener("click", () => (poseTimer ? stopPose() : startPose()));
 faceBtnEl.addEventListener("click", () => (faceTimer ? stopFace() : startFace()));
+
+/* ---------- live PEOPLE segmentation (MediaPipe Selfie, ~10ms) ---------- */
+let peopleTimer = null, peopleToken = 0, peopleBusy = false;
+const peopleBtnEl = document.getElementById("btn-people");
+
+async function peopleTick() {
+  if (peopleBusy || !camStream) return;
+  peopleBusy = true;
+  try {
+    const b = await captureFrame(FRAME_SIZE, 0.75);
+    if (!b) return;
+    const res = await fetch("/segment-people", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: b }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    overlay.people = data;
+    drawOverlay();
+    if (data.latency_ms != null) setStat("s-op-people", `${data.latency_ms} ms`);
+  } catch (err) {
+    console.warn("people loop", err);
+    setStat("s-op-people", "err");
+  } finally {
+    peopleBusy = false;
+  }
+}
+function startPeople() {
+  if (peopleTimer || !camStream) return;
+  peopleBtnEl.setAttribute("aria-pressed", "true");
+  const t = ++peopleToken;
+  const loop = async () => {
+    if (t !== peopleToken) return;
+    await peopleTick();
+    if (t === peopleToken) peopleTimer = setTimeout(loop, 10);
+  };
+  peopleTimer = setTimeout(loop, 0);
+}
+function stopPeople() {
+  peopleToken++;
+  if (peopleTimer) clearTimeout(peopleTimer);
+  peopleTimer = null;
+  peopleBtnEl.setAttribute("aria-pressed", "false");
+  clearOverlayState("people");
+  drawOverlay();
+}
+peopleBtnEl.addEventListener("click", () => (peopleTimer ? stopPeople() : startPeople()));
 
 /* Legacy one-shot FACE card (kept but no longer wired to the button). */
 function _legacyFaceOneShot() {

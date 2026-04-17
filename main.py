@@ -39,6 +39,7 @@ from schemas import (
     InpaintResponse,
     Message,
     OcrResponse,
+    PeopleSegResponse,
     PoseRequest,
     PoseResponse,
     RmbgRequest,
@@ -585,6 +586,18 @@ async def speak_endpoint(request: SpeakRequest) -> SpeakResponse:
 async def voices_endpoint() -> dict:
     import audio
     return {"voices": await asyncio.to_thread(audio.list_voices)}
+
+
+@app.post("/segment-people", response_model=PeopleSegResponse)
+async def people_endpoint(request: ImageOnlyRequest) -> PeopleSegResponse:
+    import vision
+    try:
+        res = await asyncio.to_thread(vision.people_segment, request.image)
+    except Exception as err:
+        log.error(f"/segment-people !! {err}")
+        raise HTTPException(status_code=500, detail=str(err)) from err
+    log.info(f"/segment-people -> {res['latency_ms']}ms count={res['count']}")
+    return PeopleSegResponse(**res)
 
 
 @app.post("/face", response_model=FaceMeshResponse)

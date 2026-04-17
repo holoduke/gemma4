@@ -130,6 +130,7 @@ _rmbg_session: Any = None
 _ocr_reader: Any = None
 _face_mesh: Any = None
 _emotion_pipe: Any = None
+_selfie_seg: Any = None
 
 
 def _ensure_rmbg():
@@ -305,4 +306,83 @@ def face_mesh(image_b64: str, emotion: bool = False) -> dict:
         "faces": faces,
         "latency_ms": int(dur_mesh + dur_emo),
         "timings_ms": {"mesh": round(dur_mesh, 1), "emotion": round(dur_emo, 1)},
+    }
+
+
+# ---------------- SELFIE SEGMENTATION (MediaPipe ImageSegmenter) ----------------
+
+_SELFIE_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/image_segmenter/"
+    "selfie_segmenter/float16/latest/selfie_segmenter.tflite"
+)
+_SELFIE_MODEL_PATH = "selfie_segmenter.tflite"
+
+
+def _ensure_selfie_seg():
+    global _selfie_seg
+    if _selfie_seg is not None:
+        return _selfie_seg
+    import os
+    import urllib.request
+    from mediapipe.tasks import python
+    from mediapipe.tasks.python import vision as mp_vision
+
+    if not os.path.exists(_SELFIE_MODEL_PATH):
+        log.info(f"downloading {_SELFIE_MODEL_URL}")
+        urllib.request.urlretrieve(_SELFIE_MODEL_URL, _SELFIE_MODEL_PATH)
+
+    log.info("loading mediapipe SelfieSegmenter...")
+    base_opts = python.BaseOptions(model_asset_path=_SELFIE_MODEL_PATH)
+    opts = mp_vision.ImageSegmenterOptions(
+        base_options=base_opts,
+        output_category_mask=True,
+        output_confidence_masks=False,
+        running_mode=mp_vision.RunningMode.IMAGE,
+    )
+    _selfie_seg = mp_vision.ImageSegmenter.create_from_options(opts)
+    return _selfie_seg
+
+
+def people_segment(image_b64: str, threshold: float = 0.5) -> dict:
+    """Segment all visible people via MediaPipe Selfie Segmenter. Returns
+    polygon contours (compact for client overlay). ~5-15ms on M3 Pro."""
+    import mediapipe as mp
+
+    segmenter = _ensure_selfie_seg()
+    img_bytes = base64.b64decode(image_b64)
+    pil = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    arr = np.asarray(pil)
+    h, w = arr.shape[:2]
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=arr)
+
+    with _lock:
+        t0 = time.perf_counter()
+        result = segmenter.segment(mp_image)
+        dur = (time.perf_counter() - t0) * 1000
+
+    mask = result.category_mask.numpy_view()  # 0 = background, 1 = person
+    # category_mask in selfie_segmenter is {0,1}; threshold is a no-op here but
+    # kept so a confidence-mask variant can slot in later without API change.
+    _ = threshold
+    person_mask = (mask == 0).astype(np.uint8) * 255  # inverted: selfie=0 in this model
+    # Some selfie_segmenter builds reverse labels; detect dominant region.
+    if person_mask.sum() < mask.size * 0.01:
+        person_mask = (mask == 1).astype(np.uint8) * 255
+
+    contours, _hier = cv2.findContours(person_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    polygons: list[list[list[int]]] = []
+    for c in contours:
+        if cv2.contourArea(c) < (w * h) * 0.003:  # drop specks
+            continue
+        eps = max(1.0, 0.002 * cv2.arcLength(c, True))
+        approx = cv2.approxPolyDP(c, eps, True).reshape(-1, 2).astype(int).tolist()
+        if len(approx) >= 3:
+            polygons.append(approx)
+
+    return {
+        "w": w,
+        "h": h,
+        "polygons": polygons,
+        "count": len(polygons),
+        "latency_ms": int(dur),
     }

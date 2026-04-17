@@ -130,6 +130,14 @@ class FaceMeshResponse(BaseModel):
     timings_ms: dict[str, float] = Field(default_factory=dict)
 
 
+class PeopleSegResponse(BaseModel):
+    w: int
+    h: int
+    polygons: list[list[list[int]]]
+    count: int
+    latency_ms: int
+
+
 class TranscribeRequest(BaseModel):
     audio: str = Field(..., description="Base64 of any audio container ffmpeg can read (WebM, MP3, WAV)")
     language: str | None = Field(None, max_length=8, description="ISO language code hint, e.g. 'en'")
