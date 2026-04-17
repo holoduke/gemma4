@@ -44,6 +44,9 @@ MLX_MODELS: dict[str, dict] = {
 
 _loaded: dict[str, tuple[Any, Any, Any]] = {}
 _load_lock = asyncio.Lock()
+# mlx_vlm generate/stream_generate is NOT reentrant — concurrent calls cause
+# segfaults or OOMs on shared Metal buffers. Serialise all inference.
+_infer_lock = asyncio.Lock()
 
 
 def is_mlx_name(name: str) -> bool:
@@ -165,7 +168,8 @@ async def chat(
         }
 
     try:
-        out = await asyncio.to_thread(_run)
+        async with _infer_lock:
+            out = await asyncio.to_thread(_run)
     finally:
         for p in image_paths:
             try:
@@ -261,15 +265,16 @@ async def chat_stream(
         finally:
             asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
-    asyncio.get_running_loop().run_in_executor(None, _produce)
-
+    await _infer_lock.acquire()
     try:
+        asyncio.get_running_loop().run_in_executor(None, _produce)
         while True:
             item = await queue.get()
             if item is None:
                 break
             yield item
     finally:
+        _infer_lock.release()
         for p in image_paths:
             try:
                 import os
