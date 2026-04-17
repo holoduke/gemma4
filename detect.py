@@ -187,9 +187,17 @@ class Owlv2Detector:
         with self._torch.no_grad():
             outputs = self._model(**inputs)
         target_sizes = self._torch.tensor([pil.size[::-1]])
-        results = self._processor.post_process_object_detection(
-            outputs, target_sizes=target_sizes, threshold=conf,
-        )[0]
+        # Newer transformers renamed the API — try both names.
+        post = (
+            getattr(self._processor, "post_process_grounded_object_detection", None)
+            or getattr(self._processor, "post_process_object_detection", None)
+        )
+        if post is None:
+            raise RuntimeError("Owlv2Processor missing post_process_* method")
+        try:
+            results = post(outputs, target_sizes=target_sizes, threshold=conf)[0]
+        except TypeError:
+            results = post(outputs, target_sizes=target_sizes, threshold=conf, text_labels=texts)[0]
         boxes = results["boxes"].cpu().numpy() if len(results["boxes"]) else np.empty((0, 4))
         scores = results["scores"].cpu().numpy() if len(results["scores"]) else np.empty((0,))
         cls_idx = results["labels"].cpu().numpy().astype(int) if len(results["labels"]) else np.empty((0,), dtype=int)
