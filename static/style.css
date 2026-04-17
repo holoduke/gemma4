@@ -774,7 +774,8 @@ body.mode-video .bar-mini { width: 24px; }
   clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
   transition: all 0.15s;
 }
-.mini-btn:hover { background: rgba(0, 240, 255, 0.15); }
+.mini-btn:hover:not([aria-pressed="true"]) { background: rgba(0, 240, 255, 0.15); }
+.toggle-mini[aria-pressed="true"]:hover { filter: brightness(1.15); }
 .mini-btn.flash { animation: miniFlash 0.3s ease-out; }
 @keyframes miniFlash {
   0%   { background: rgba(255, 43, 214, 0.5); }
@@ -884,14 +885,14 @@ body.mode-video .bar-mini { width: 24px; }
   border-color: var(--amber);
   color: var(--amber);
 }
-.extras-row .mini-btn:hover { background: rgba(255, 176, 0, 0.15); box-shadow: 0 0 10px rgba(255, 176, 0, 0.4); }
+.extras-row .mini-btn:hover:not([aria-pressed="true"]) { background: rgba(255, 176, 0, 0.15); box-shadow: 0 0 10px rgba(255, 176, 0, 0.4); }
 /* Live-overlay row sits at the top of the controls pane — use the cyan
    accent so it reads as "pipelines" rather than "one-shot actions". */
 .extras-row-overlays .mini-btn {
   border-color: var(--cyan);
   color: var(--cyan);
 }
-.extras-row-overlays .mini-btn:hover { background: rgba(0, 240, 255, 0.15); box-shadow: 0 0 10px rgba(0, 240, 255, 0.35); }
+.extras-row-overlays .mini-btn:hover:not([aria-pressed="true"]) { background: rgba(0, 240, 255, 0.15); box-shadow: 0 0 10px rgba(0, 240, 255, 0.35); }
 
 /* Track-specific settings block — hidden until TRACK is armed */
 .track-props {
