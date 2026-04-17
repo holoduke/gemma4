@@ -24,6 +24,22 @@ log = logging.getLogger("emma4.detect")
 _lock = threading.Lock()
 
 
+def _pick_device() -> str:
+    """Prefer CUDA, then MPS, then CPU. GroundingDINO and OWLv2 (transformers)
+    stay on CPU for MPS because several ops fall back and mixed-device runs
+    are slower than pure CPU; CUDA gets a full speedup."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "cpu"  # see docstring
+    except Exception:
+        pass
+    return "cpu"
+
+
 # ---------- Detectors ----------
 
 DETECTOR_PRESETS: dict[str, dict] = {
@@ -90,14 +106,18 @@ class GroundingDinoDetector:
 
         self.name = model_id
         self._torch = torch
+        self._device = _pick_device()
+        self._dtype = torch.float16 if self._device == "cuda" else torch.float32
         self._processor = AutoProcessor.from_pretrained(model_id)
-        self._model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id)
+        self._model = AutoModelForZeroShotObjectDetection.from_pretrained(
+            model_id, torch_dtype=self._dtype
+        ).to(self._device)
         self._model.eval()
 
     def detect(self, image, prompts, conf, imgsz):
         pil = Image.fromarray(image)
         text = ". ".join(prompts) + "."
-        inputs = self._processor(images=pil, text=text, return_tensors="pt")
+        inputs = self._processor(images=pil, text=text, return_tensors="pt").to(self._device)
         with self._torch.no_grad():
             outputs = self._model(**inputs)
         target_sizes = self._torch.tensor([pil.size[::-1]])
@@ -136,14 +156,18 @@ class Owlv2Detector:
 
         self.name = model_id
         self._torch = torch
+        self._device = _pick_device()
+        self._dtype = torch.float16 if self._device == "cuda" else torch.float32
         self._processor = Owlv2Processor.from_pretrained(model_id)
-        self._model = Owlv2ForObjectDetection.from_pretrained(model_id)
+        self._model = Owlv2ForObjectDetection.from_pretrained(
+            model_id, torch_dtype=self._dtype
+        ).to(self._device)
         self._model.eval()
 
     def detect(self, image, prompts, conf, imgsz):
         pil = Image.fromarray(image)
         texts = [[f"a photo of a {p}" for p in prompts]]
-        inputs = self._processor(text=texts, images=pil, return_tensors="pt")
+        inputs = self._processor(text=texts, images=pil, return_tensors="pt").to(self._device)
         with self._torch.no_grad():
             outputs = self._model(**inputs)
         target_sizes = self._torch.tensor([pil.size[::-1]])

@@ -7,3 +7,13 @@ psutil==6.1.0
 ultralytics==8.3.40
 opencv-python-headless==4.10.0.84
 pillow==11.0.0
+# Vision-language detectors (GroundingDINO, OWLv2)
+transformers>=4.46
+# SD 1.5 inpainting + img2img with LCM LoRA
+diffusers>=0.30
+accelerate
+peft
+safetensors
+# NOTE: torch is pulled in transitively by ultralytics. For NVIDIA CUDA, install
+# the matching wheel first:  pip install torch --index-url https://download.pytorch.org/whl/cu121
+# For macOS (Apple Silicon), the default PyPI wheel already includes MPS support.
