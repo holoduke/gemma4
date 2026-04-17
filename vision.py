@@ -137,6 +137,8 @@ _face_mesh: Any = None
 _emotion_pipe: Any = None
 _selfie_seg: Any = None
 _fastsam_auto: Any = None
+_bgsub: Any = None
+_bgsub_frames: int = 0
 
 
 def _ensure_rmbg():
@@ -401,6 +403,56 @@ def _ensure_selfie_seg():
     )
     _selfie_seg = mp_vision.ImageSegmenter.create_from_options(opts)
     return _selfie_seg
+
+
+# ---------------- BACKGROUND SUBTRACTION (OpenCV MOG2, non-AI, ~5ms) ----------------
+
+def bg_subtract(image_b64: str, reset: bool = False, min_area_frac: float = 0.005) -> dict:
+    """Classical CV background subtraction. Learns the static background
+    frame-by-frame and returns polygons of the moving foreground.
+    Assumes the camera is still. ~3-8 ms per frame."""
+    global _bgsub, _bgsub_frames
+
+    img_bytes = base64.b64decode(image_b64)
+    arr = np.array(Image.open(io.BytesIO(img_bytes)).convert("RGB"))
+    h, w = arr.shape[:2]
+    bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+
+    with _lock:
+        if _bgsub is None or reset:
+            _bgsub = cv2.createBackgroundSubtractorMOG2(
+                history=500, varThreshold=32, detectShadows=False
+            )
+            _bgsub_frames = 0
+        t0 = time.perf_counter()
+        fg = _bgsub.apply(bgr)
+        _bgsub_frames += 1
+        # Morphological cleanup: erode noise, close small gaps.
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN, kernel)
+        fg = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, kernel)
+        dur = (time.perf_counter() - t0) * 1000
+        frames_learned = _bgsub_frames
+
+    contours, _h = cv2.findContours(fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    min_area = (w * h) * min_area_frac
+    polygons: list[list[list[int]]] = []
+    for c in contours:
+        if cv2.contourArea(c) < min_area:
+            continue
+        eps = max(1.0, 0.002 * cv2.arcLength(c, True))
+        approx = cv2.approxPolyDP(c, eps, True).reshape(-1, 2).astype(int).tolist()
+        if len(approx) >= 3:
+            polygons.append(approx)
+
+    return {
+        "w": w,
+        "h": h,
+        "polygons": polygons,
+        "count": len(polygons),
+        "frames_learned": frames_learned,
+        "latency_ms": int(dur),
+    }
 
 
 def _ensure_fastsam_auto():

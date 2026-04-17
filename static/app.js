@@ -684,6 +684,7 @@ function stopCam() {
   if (typeof stopFace === "function") stopFace();
   if (typeof stopPeople === "function") stopPeople();
   if (typeof stopSegall === "function") stopSegall();
+  if (typeof stopBgSub === "function") stopBgSub();
   autoTrackPrimed = false;
   if (camResizeObserver) {
     camResizeObserver.disconnect();
@@ -945,7 +946,7 @@ function clearOverlay() {
 }
 
 // Shared overlay state so TRACK / POSE / FACE can all composite on the same canvas.
-const overlay = { detect: null, pose: null, face: null, people: null, segall: null };
+const overlay = { detect: null, pose: null, face: null, people: null, segall: null, bgsub: null };
 function clearOverlayState(which) {
   if (which) overlay[which] = null;
   else Object.keys(overlay).forEach((k) => (overlay[k] = null));
@@ -963,10 +964,30 @@ function drawOverlay() {
   camLabels.innerHTML = "";
   // segall goes first (lowest layer), then people, then specific pipelines on top.
   if (overlay.segall) _drawSegallOn(ctx, overlay.segall);
+  if (overlay.bgsub)  _drawBgSubOn(ctx, overlay.bgsub);
   if (overlay.people) _drawPeopleOn(ctx, overlay.people);
   if (overlay.detect) _drawDetectionsOn(ctx, overlay.detect, cw, ch);
   if (overlay.pose)   _drawPoseOn(ctx, overlay.pose);
   if (overlay.face)   _drawFaceOn(ctx, overlay.face);
+}
+
+function _drawBgSubOn(ctx, data) {
+  if (!data.polygons || !data.polygons.length) return;
+  ctx.fillStyle = "rgba(255, 176, 0, 0.22)";   // amber
+  ctx.strokeStyle = "rgba(255, 176, 0, 0.9)";
+  ctx.lineWidth = 2;
+  ctx.shadowColor = "#ffb000";
+  ctx.shadowBlur = 10;
+  for (const poly of data.polygons) {
+    if (poly.length < 3) continue;
+    ctx.beginPath();
+    ctx.moveTo(poly[0][0], poly[0][1]);
+    for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
 }
 
 function _drawSegallOn(ctx, data) {
@@ -1900,6 +1921,60 @@ function stopPeople() {
   setStat("s-op-people", "--");
 }
 peopleBtnEl.addEventListener("click", () => (peopleTimer ? stopPeople() : startPeople()));
+
+/* ---------- BG-SUB (OpenCV MOG2 background subtraction, ~5ms) ---------- */
+let bgsubTimer = null, bgsubToken = 0, bgsubBusy = false, bgsubNeedsReset = true;
+const bgsubBtnEl = document.getElementById("btn-bgsub");
+
+async function bgsubTick() {
+  if (bgsubBusy || !camStream) return;
+  const myToken = bgsubToken;
+  bgsubBusy = true;
+  try {
+    const b = await captureFrame(FRAME_SIZE, 0.75);
+    if (!b) return;
+    const res = await fetch("/bg-sub", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: b, reset: bgsubNeedsReset }),
+    });
+    bgsubNeedsReset = false;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (myToken !== bgsubToken) return;
+    overlay.bgsub = data;
+    drawOverlay();
+    if (data.latency_ms != null) setStat("s-op-bgsub", `${data.latency_ms} ms`);
+  } catch (err) {
+    console.warn("bgsub loop", err);
+    setStat("s-op-bgsub", "err");
+  } finally {
+    bgsubBusy = false;
+  }
+}
+
+function startBgSub() {
+  if (bgsubTimer || !camStream) return;
+  bgsubBtnEl.setAttribute("aria-pressed", "true");
+  bgsubNeedsReset = true;  // fresh background model on every start
+  const t = ++bgsubToken;
+  const loop = async () => {
+    if (t !== bgsubToken) return;
+    await bgsubTick();
+    if (t === bgsubToken) bgsubTimer = setTimeout(loop, 15);
+  };
+  bgsubTimer = setTimeout(loop, 0);
+}
+function stopBgSub() {
+  bgsubToken++;
+  if (bgsubTimer) clearTimeout(bgsubTimer);
+  bgsubTimer = null;
+  bgsubBtnEl.setAttribute("aria-pressed", "false");
+  clearOverlayState("bgsub");
+  drawOverlay();
+  setStat("s-op-bgsub", "--");
+}
+bgsubBtnEl.addEventListener("click", () => (bgsubTimer ? stopBgSub() : startBgSub()));
 
 /* ---------- live SEGMENT-all loop (FastSAM auto, when TRACK is off) ---------- */
 let segallTimer = null, segallToken = 0, segallBusy = false;

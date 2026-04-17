@@ -152,6 +152,20 @@ class SegmentAllResponse(BaseModel):
     latency_ms: int
 
 
+class BgSubRequest(BaseModel):
+    image: str = Field(..., description="Base64 JPEG/PNG")
+    reset: bool = Field(False, description="Reset the learned background model")
+
+
+class BgSubResponse(BaseModel):
+    w: int
+    h: int
+    polygons: list[list[list[int]]]
+    count: int
+    frames_learned: int
+    latency_ms: int
+
+
 class TranscribeRequest(BaseModel):
     audio: str = Field(..., description="Base64 of any audio container ffmpeg can read (WebM, MP3, WAV)")
     language: str | None = Field(None, max_length=8, description="ISO language code hint, e.g. 'en'")

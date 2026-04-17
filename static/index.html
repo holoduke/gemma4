@@ -99,6 +99,7 @@
           <button type="button" id="btn-pose" class="mini-btn toggle-mini" aria-pressed="false" title="Live pose skeleton + body fill, stable #ids per person">POSE</button>
           <button type="button" id="btn-face" class="mini-btn toggle-mini" aria-pressed="false" title="Live face mesh + emotion + stable #ids">FACE</button>
           <button type="button" id="btn-people" class="mini-btn toggle-mini" aria-pressed="false" title="Live person outline via MediaPipe Selfie Segmenter (~10ms)">PEOPLE</button>
+          <button type="button" id="btn-bgsub" class="mini-btn toggle-mini" aria-pressed="false" title="OpenCV MOG2 background subtraction (~5ms). Keep the camera still; it learns the background over ~30 frames then highlights whatever moves.">BG-SUB</button>
         </div>
 
         <!-- One-shot and scan actions -->
@@ -198,6 +199,7 @@
           <div class="stat"><span class="k">OCR</span><span class="v" id="s-op-ocr">--</span></div>
           <div class="stat"><span class="k">FACE</span><span class="v" id="s-op-face">--</span></div>
           <div class="stat"><span class="k">PEOPLE</span><span class="v" id="s-op-people">--</span></div>
+          <div class="stat"><span class="k">BG-SUB</span><span class="v" id="s-op-bgsub">--</span></div>
         </div>
         <div class="stat-group">
           <div class="stat-group-title">// GENERATIVE</div>

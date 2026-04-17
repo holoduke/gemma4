@@ -42,6 +42,8 @@ from schemas import (
     PeopleSegResponse,
     PoseRequest,
     PoseResponse,
+    BgSubRequest,
+    BgSubResponse,
     SegmentAllRequest,
     SegmentAllResponse,
     RmbgRequest,
@@ -600,6 +602,17 @@ async def people_endpoint(request: ImageOnlyRequest) -> PeopleSegResponse:
         raise HTTPException(status_code=500, detail=str(err)) from err
     log.info(f"/segment-people -> {res['latency_ms']}ms count={res['count']}")
     return PeopleSegResponse(**res)
+
+
+@app.post("/bg-sub", response_model=BgSubResponse)
+async def bg_sub_endpoint(request: BgSubRequest) -> BgSubResponse:
+    import vision
+    try:
+        res = await asyncio.to_thread(vision.bg_subtract, request.image, request.reset)
+    except Exception as err:
+        log.error(f"/bg-sub !! {err}")
+        raise HTTPException(status_code=500, detail=str(err)) from err
+    return BgSubResponse(**res)
 
 
 @app.post("/segment-all", response_model=SegmentAllResponse)
