@@ -194,7 +194,10 @@ async function pollStats() {
     if (!res.ok) return;
     const s = await res.json();
     if (s.model) {
-      $("s-model").textContent = s.model.name ?? "--";
+      // Short display name — MLX ids have an `mlx:` prefix that crowds the tile.
+      const rawName = s.model.name ?? "--";
+      $("s-model").textContent = rawName.replace(/^mlx:/, "").slice(0, 28);
+      $("s-backend").textContent = (s.model.backend ?? "--").toUpperCase();
       $("s-params").textContent = s.model.parameter_size ?? "--";
       $("s-quant").textContent = s.model.quantization ?? "--";
     }

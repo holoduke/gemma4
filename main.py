@@ -87,22 +87,39 @@ async def index() -> FileResponse:
 @app.get("/stats")
 async def stats_endpoint() -> dict:
     data = await asyncio.to_thread(sysstats.collect)
+    current = _STATE["emma"]
     model_info = None
+    # Merge Ollama + MLX catalogues so MLX models also report params/quant.
     try:
-        models = await client.list_models()
-        for m in models.get("models", []):
-            if m.get("name") == _STATE["emma"]:
-                d = m.get("details", {})
-                model_info = {
-                    "name": m["name"],
-                    "parameter_size": d.get("parameter_size"),
-                    "quantization": d.get("quantization_level"),
-                    "size_gb": round(m.get("size", 0) / 1024**3, 2),
-                }
-                break
+        if mlx_client.is_mlx_name(current):
+            mlx_list = (await mlx_client.list_models()).get("models", [])
+            for m in mlx_list:
+                if m.get("name") == current:
+                    d = m.get("details", {})
+                    model_info = {
+                        "name": m["name"],
+                        "parameter_size": d.get("parameter_size"),
+                        "quantization": d.get("quantization_level"),
+                        "size_gb": round(m.get("size", 0) / 1024**3, 2),
+                        "backend": "mlx",
+                    }
+                    break
+        else:
+            models = await client.list_models()
+            for m in models.get("models", []):
+                if m.get("name") == current:
+                    d = m.get("details", {})
+                    model_info = {
+                        "name": m["name"],
+                        "parameter_size": d.get("parameter_size"),
+                        "quantization": d.get("quantization_level"),
+                        "size_gb": round(m.get("size", 0) / 1024**3, 2),
+                        "backend": "ollama",
+                    }
+                    break
     except Exception:
         pass
-    data["model"] = model_info or {"name": _STATE["emma"]}
+    data["model"] = model_info or {"name": current, "backend": "mlx" if mlx_client.is_mlx_name(current) else "ollama"}
     data["state"] = dict(_STATE)
     return data
 
