@@ -1402,7 +1402,7 @@ async function scanOnce() {
   }
   scanBusy = true;
   scanBtn.disabled = true;
-  scanBtn.textContent = "SCANNING…";
+  scanBtn.classList.add("busy");
   try {
     const b = await captureFrame(FRAME_SIZE, 0.8);
     if (!b) return;
@@ -1427,7 +1427,7 @@ async function scanOnce() {
   } finally {
     scanBusy = false;
     scanBtn.disabled = false;
-    scanBtn.textContent = "SCAN";
+    scanBtn.classList.remove("busy");
   }
 }
 
