@@ -893,6 +893,25 @@ body.mode-video .bar-mini { width: 24px; }
 }
 .extras-row-overlays .mini-btn:hover { background: rgba(0, 240, 255, 0.15); box-shadow: 0 0 10px rgba(0, 240, 255, 0.35); }
 
+/* Track-specific settings block — hidden until TRACK is armed */
+.track-props {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px dashed rgba(0, 240, 255, 0.3);
+  background: rgba(0, 240, 255, 0.04);
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+}
+body.track-armed .track-props { display: flex; }
+.track-props-title {
+  color: var(--cyan) !important;
+  text-shadow: 0 0 4px rgba(0, 240, 255, 0.35);
+  border-bottom-color: rgba(0, 240, 255, 0.25) !important;
+  padding-bottom: 4px !important;
+  margin-bottom: 2px;
+}
+
 .inpaint-result {
   margin-top: 8px;
   border: 1px solid var(--amber);

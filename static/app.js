@@ -1208,6 +1208,7 @@ function startTrack() {
     return;
   }
   trackToggle.setAttribute("aria-pressed", "true");
+  document.body.classList.add("track-armed");
   const myToken = ++trackToken;
   const tick = async () => {
     if (myToken !== trackToken) return;
@@ -1224,6 +1225,7 @@ function stopTrack() {
   if (trackTimer) clearTimeout(trackTimer);
   trackTimer = null;
   trackToggle.setAttribute("aria-pressed", "false");
+  document.body.classList.remove("track-armed");
   // Drop the detection overlay (boxes/polygons/labels) and also forget the
   // per-pipeline latency so the telemetry tiles don't show stale numbers.
   clearOverlayState("detect");
@@ -1233,8 +1235,16 @@ function stopTrack() {
 }
 
 trackToggle.addEventListener("click", () => {
-  if (trackTimer) stopTrack();
-  else startTrack();
+  if (trackTimer || document.body.classList.contains("track-armed")) {
+    stopTrack();
+    return;
+  }
+  // Arm the section so the user can edit the track input / chips before the
+  // loop actually starts. If there's already text, start immediately.
+  document.body.classList.add("track-armed");
+  trackToggle.setAttribute("aria-pressed", "true");
+  if (trackInput.value.trim() && camStream) startTrack();
+  else trackInput.focus();
 });
 trackInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {

@@ -91,44 +91,49 @@
       <section id="cam-view" class="cam-view">
         <div class="cam-title">// CONTROLS</div>
 
-        <!-- Live overlay toggles — all per-frame pipelines in one row -->
+      <section id="cam-view" class="cam-view">
+        <div class="cam-title">// CONTROLS</div>
+
+        <!-- Live per-frame pipelines -->
         <div class="extras-row extras-row-overlays">
           <button type="button" id="cam-live" class="mini-btn toggle-mini" aria-pressed="false" title="Gemma live scene description (appended to the LIVE FEED)">LIVE</button>
           <button type="button" id="track-toggle" class="mini-btn toggle-mini" aria-pressed="false" title="Open-vocab detection from the TRACK input (YOLO-World / Grounding DINO)">TRACK</button>
-          <button type="button" id="masks-toggle" class="mini-btn toggle-mini" aria-pressed="false" title="Pixel outlines (slower). Off = boxes (~25 fps)">MASKS</button>
           <button type="button" id="btn-pose" class="mini-btn toggle-mini" aria-pressed="false" title="Live pose skeleton + body fill, stable #ids per person">POSE</button>
           <button type="button" id="btn-face" class="mini-btn toggle-mini" aria-pressed="false" title="Live face mesh + emotion + stable #ids">FACE</button>
           <button type="button" id="btn-people" class="mini-btn toggle-mini" aria-pressed="false" title="Live person outline via MediaPipe Selfie Segmenter (~10ms)">PEOPLE</button>
         </div>
-        <div class="track-row">
-          <input id="track-input" type="text" placeholder="track: person, cup..." />
-        </div>
-        <div class="custom-tag-row">
-          <input id="custom-tag-input" type="text" placeholder="+ add custom tag (e.g. background)" />
-          <button type="button" id="custom-tag-add" class="mini-btn" title="Add custom tag">ADD</button>
-        </div>
-        <div id="scan-chips" class="scan-chips" hidden></div>
 
-        <div class="cam-controls">
+        <!-- One-shot and scan actions -->
+        <div class="extras-row">
           <button type="button" id="cam-scan" class="mini-btn" title="Detect objects in current frame with Gemma">SCAN</button>
           <button type="button" id="cam-scan-auto" class="mini-btn toggle-mini" aria-pressed="false" title="Re-scan every N seconds (shares the LIVE interval)">AUTO</button>
+          <button type="button" id="btn-depth" class="mini-btn" title="Depth Anything V2 Small — coloured depth map">DEPTH</button>
+          <button type="button" id="btn-cutout" class="mini-btn" title="Background removal (U2Net / rembg)">CUTOUT</button>
+          <button type="button" id="btn-ocr" class="mini-btn" title="Read text in the frame (EasyOCR)">OCR</button>
         </div>
+
+        <!-- TRACK-specific properties — shown only when TRACK is armed/running -->
+        <div class="track-props">
+          <div class="cam-title track-props-title">// TRACK SETTINGS</div>
+          <div class="track-row">
+            <input id="track-input" type="text" placeholder="track: person, cup..." />
+            <button type="button" id="masks-toggle" class="mini-btn toggle-mini" aria-pressed="false" title="Pixel outlines (slower). Off = boxes (~25 fps)">MASKS</button>
+          </div>
+          <div class="custom-tag-row">
+            <input id="custom-tag-input" type="text" placeholder="+ add custom tag (e.g. background)" />
+            <button type="button" id="custom-tag-add" class="mini-btn" title="Add custom tag">ADD</button>
+          </div>
+          <div id="scan-chips" class="scan-chips" hidden></div>
+        </div>
+
         <div class="prompt-row">
           <label for="live-prompt">live prompt</label>
-          <textarea
-            id="live-prompt"
-            rows="2"
-            placeholder="Describe the scene in under 15 words."
-          ></textarea>
+          <textarea id="live-prompt" rows="2" placeholder="Describe the scene in under 15 words."></textarea>
           <button type="button" id="live-prompt-reset" class="tiny-btn" title="Reset to default">↺</button>
         </div>
         <div class="prompt-row">
           <label for="scan-prompt">scan prompt</label>
-          <textarea
-            id="scan-prompt"
-            rows="2"
-            placeholder="List up to {max_objects} distinct physical objects..."
-          ></textarea>
+          <textarea id="scan-prompt" rows="2" placeholder="List up to {max_objects} distinct physical objects..."></textarea>
           <button type="button" id="scan-prompt-reset" class="tiny-btn" title="Reset to default">↺</button>
         </div>
         <div class="replace-row">
@@ -143,11 +148,6 @@
           <label for="gen-strength">strength</label>
           <input id="gen-strength" type="range" min="0.2" max="0.95" step="0.05" value="0.7" />
           <span id="gen-strength-val">0.70</span>
-        </div>
-        <div class="extras-row">
-          <button type="button" id="btn-depth" class="mini-btn" title="Depth Anything V2 Small — coloured depth map (single shot)">DEPTH</button>
-          <button type="button" id="btn-cutout" class="mini-btn" title="Background removal (U2Net / rembg)">CUTOUT</button>
-          <button type="button" id="btn-ocr" class="mini-btn" title="Read text in the frame (EasyOCR)">OCR</button>
         </div>
         <div class="cam-interval">
           <label for="cam-interval">interval (LIVE + AUTO)</label>
