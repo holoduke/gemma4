@@ -153,6 +153,20 @@ class SegmentAllResponse(BaseModel):
     latency_ms: int
 
 
+class AnimeRequest(BaseModel):
+    image: str = Field(..., description="Base64 JPEG/PNG")
+    style: str = Field("face_paint_512_v2", description="AnimeGANv2 style checkpoint")
+    size: int = Field(384, ge=128, le=768)
+
+
+class AnimeResponse(BaseModel):
+    image: str
+    width: int
+    height: int
+    style: str
+    latency_ms: int
+
+
 class BgSubRequest(BaseModel):
     image: str = Field(..., description="Base64 JPEG/PNG")
     reset: bool = Field(False, description="Reset the learned background model")

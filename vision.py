@@ -139,6 +139,8 @@ _selfie_seg: Any = None
 _fastsam_auto: Any = None
 _bgsub: Any = None
 _bgsub_frames: int = 0
+_anime_model: Any = None
+_anime_device: str = "cpu"
 
 
 def _ensure_rmbg():
@@ -459,6 +461,74 @@ def _ensure_selfie_seg():
     )
     _selfie_seg = mp_vision.ImageSegmenter.create_from_options(opts)
     return _selfie_seg
+
+
+# ---------------- ANIME STYLIZATION (AnimeGANv2 via torch.hub, MPS ~110ms) ----------------
+
+ANIME_STYLES = {
+    "face_paint_512_v2": "Studio Ghibli / face paint (portraits)",
+    "face_paint_512_v1": "Face paint v1",
+    "celeba_distill":    "CelebA distilled (softer)",
+    "paprika":           "Paprika (vivid)",
+}
+
+
+def _ensure_anime(style: str = "face_paint_512_v2"):
+    global _anime_model, _anime_device
+    # Cache keyed on style so switching reloads the right weights.
+    if isinstance(_anime_model, tuple) and _anime_model[0] == style:
+        return _anime_model[1]
+    import torch
+    _anime_device = (
+        "mps" if torch.backends.mps.is_available()
+        else "cuda" if torch.cuda.is_available()
+        else "cpu"
+    )
+    log.info(f"loading AnimeGANv2 ({style}) on {_anime_device}...")
+    m = torch.hub.load(
+        "bryandlee/animegan2-pytorch:main",
+        "generator",
+        pretrained=style,
+        verbose=False,
+        trust_repo=True,
+    ).eval().to(_anime_device)
+    _anime_model = (style, m)
+    return m
+
+
+def anime_stylize(image_b64: str, style: str = "face_paint_512_v2", size: int = 384) -> dict:
+    import torch
+
+    model = _ensure_anime(style)
+    img_bytes = base64.b64decode(image_b64)
+    pil = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    orig_w, orig_h = pil.size
+    # Model wants a square-ish input; preserve aspect via resize.
+    pil_resized = pil.resize((size, size), Image.LANCZOS)
+
+    arr = np.array(pil_resized).astype(np.float32)
+    tensor = (torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0) / 127.5 - 1.0).to(_anime_device)
+
+    with _lock:
+        t0 = time.perf_counter()
+        with torch.no_grad():
+            out = model(tensor)
+        if _anime_device == "mps":
+            torch.mps.synchronize()
+        dur = (time.perf_counter() - t0) * 1000
+
+    out = (out.squeeze(0).clamp(-1, 1).add(1).div(2).mul(255).byte()
+           .permute(1, 2, 0).cpu().numpy())
+    out_pil = Image.fromarray(out).resize((orig_w, orig_h), Image.LANCZOS)
+    buf = io.BytesIO()
+    out_pil.save(buf, format="JPEG", quality=85)
+    return {
+        "image": base64.b64encode(buf.getvalue()).decode("ascii"),
+        "width": orig_w,
+        "height": orig_h,
+        "style": style,
+        "latency_ms": int(dur),
+    }
 
 
 # ---------------- BACKGROUND SUBTRACTION (OpenCV MOG2, non-AI, ~5ms) ----------------

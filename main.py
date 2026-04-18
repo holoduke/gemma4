@@ -42,6 +42,8 @@ from schemas import (
     PeopleSegResponse,
     PoseRequest,
     PoseResponse,
+    AnimeRequest,
+    AnimeResponse,
     BgSubRequest,
     BgSubResponse,
     SegmentAllRequest,
@@ -675,6 +677,17 @@ async def people_endpoint(request: ImageOnlyRequest) -> PeopleSegResponse:
         raise HTTPException(status_code=500, detail=str(err)) from err
     log.info(f"/segment-people -> {res['latency_ms']}ms count={res['count']}")
     return PeopleSegResponse(**res)
+
+
+@app.post("/anime", response_model=AnimeResponse)
+async def anime_endpoint(request: AnimeRequest) -> AnimeResponse:
+    import vision
+    try:
+        res = await asyncio.to_thread(vision.anime_stylize, request.image, request.style, request.size)
+    except Exception as err:
+        log.error(f"/anime !! {err}")
+        raise HTTPException(status_code=500, detail=str(err)) from err
+    return AnimeResponse(**res)
 
 
 @app.post("/bg-sub", response_model=BgSubResponse)

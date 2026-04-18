@@ -709,6 +709,7 @@ function stopCam() {
   if (typeof stopPeople === "function") stopPeople();
   if (typeof stopSegall === "function") stopSegall();
   if (typeof stopBgSub === "function") stopBgSub();
+  if (typeof stopAnime === "function") stopAnime();
   autoTrackPrimed = false;
   if (camResizeObserver) {
     camResizeObserver.disconnect();
@@ -997,7 +998,10 @@ function clearOverlay() {
 }
 
 // Shared overlay state so TRACK / POSE / FACE can all composite on the same canvas.
-const overlay = { detect: null, pose: null, face: null, people: null, segall: null, bgsub: null };
+const overlay = { detect: null, pose: null, face: null, people: null, segall: null, bgsub: null, anime: null };
+// AnimeGANv2 returns a full JPEG per frame; we keep a decoded ImageBitmap
+// around so drawOverlay can redraw quickly without re-decoding.
+let _animeBitmap = null;
 function clearOverlayState(which) {
   if (which) overlay[which] = null;
   else Object.keys(overlay).forEach((k) => (overlay[k] = null));
@@ -1013,7 +1017,9 @@ function drawOverlay() {
   const ctx = camCanvas.getContext("2d");
   ctx.clearRect(0, 0, cw, ch);
   camLabels.innerHTML = "";
-  // segall goes first (lowest layer), then people, then specific pipelines on top.
+  // ANIME first = lowest layer — it's a full-frame replacement that other
+  // overlays draw on top of.
+  if (overlay.anime && _animeBitmap) ctx.drawImage(_animeBitmap, 0, 0, cw, ch);
   if (overlay.segall) _drawSegallOn(ctx, overlay.segall);
   if (overlay.bgsub)  _drawBgSubOn(ctx, overlay.bgsub);
   if (overlay.people) _drawPeopleOn(ctx, overlay.people);
@@ -2078,6 +2084,67 @@ function stopBgSub() {
   setStat("s-op-bgsub", "--");
 }
 bgsubBtnEl.addEventListener("click", () => (bgsubTimer ? stopBgSub() : startBgSub()));
+
+/* ---------- ANIME live stylization (AnimeGANv2, ~110ms) ---------- */
+let animeTimer = null, animeToken = 0, animeBusy = false;
+const animeBtnEl = document.getElementById("btn-anime");
+
+async function animeTick() {
+  if (animeBusy || !camStream) return;
+  const myToken = animeToken;
+  animeBusy = true;
+  try {
+    const b = await captureFrame(384, 0.8);  // model wants square-ish, 384 is the sweet spot
+    if (!b) return;
+    const res = await fetch("/anime", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: b, size: 384 }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (myToken !== animeToken) return;
+    // Decode the stylised JPEG once per response into an ImageBitmap so the
+    // next drawOverlay tick can paint it instantly.
+    try {
+      const blob = await (await fetch(`data:image/jpeg;base64,${data.image}`)).blob();
+      _animeBitmap = await createImageBitmap(blob);
+    } catch {
+      _animeBitmap = null;
+    }
+    overlay.anime = { w: data.width, h: data.height };
+    drawOverlay();
+    if (data.latency_ms != null) setStat("s-op-anime", `${data.latency_ms} ms`);
+  } catch (err) {
+    console.warn("anime loop", err);
+    setStat("s-op-anime", "err");
+  } finally {
+    animeBusy = false;
+  }
+}
+
+function startAnime() {
+  if (animeTimer || !camStream) return;
+  animeBtnEl.setAttribute("aria-pressed", "true");
+  const t = ++animeToken;
+  const loop = async () => {
+    if (t !== animeToken) return;
+    await animeTick();
+    if (t === animeToken) animeTimer = setTimeout(loop, 20);
+  };
+  animeTimer = setTimeout(loop, 0);
+}
+function stopAnime() {
+  animeToken++;
+  if (animeTimer) clearTimeout(animeTimer);
+  animeTimer = null;
+  animeBtnEl.setAttribute("aria-pressed", "false");
+  _animeBitmap = null;
+  clearOverlayState("anime");
+  drawOverlay();
+  setStat("s-op-anime", "--");
+}
+animeBtnEl.addEventListener("click", () => (animeTimer ? stopAnime() : startAnime()));
 
 /* ---------- live SEGMENT-all loop (FastSAM auto, when TRACK is off) ---------- */
 let segallTimer = null, segallToken = 0, segallBusy = false;
