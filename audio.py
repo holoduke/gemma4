@@ -124,6 +124,59 @@ def speak(text: str, voice: str = "af_bella", speed: float = 1.0) -> dict:
     }
 
 
+_f5: Any = None
+
+
+def _ensure_f5():
+    global _f5
+    if _f5 is not None:
+        return _f5
+    from f5_tts.api import F5TTS
+    log.info("loading F5-TTS (first call downloads ~1.3GB of weights)...")
+    t0 = time.perf_counter()
+    _f5 = F5TTS()
+    log.info(f"F5-TTS ready in {time.perf_counter() - t0:.1f}s")
+    return _f5
+
+
+def clone_voice(ref_audio_b64: str, ref_text: str, gen_text: str) -> dict:
+    """F5-TTS voice cloning: takes ~5-15 s of reference audio + its transcript,
+    produces synthetic speech of ``gen_text`` in the same voice."""
+    f5 = _ensure_f5()
+    raw = base64.b64decode(ref_audio_b64)
+    ref_wav = _decode_audio_to_wav(raw)  # normalises to 16kHz mono WAV
+    try:
+        t0 = time.perf_counter()
+        wav, sr, _spec = f5.infer(
+            ref_file=ref_wav,
+            ref_text=ref_text.strip(),
+            gen_text=gen_text.strip(),
+            remove_silence=True,
+            file_wave=None,
+        )
+        dur = (time.perf_counter() - t0) * 1000
+    finally:
+        try:
+            os.unlink(ref_wav)
+        except Exception:
+            pass
+
+    import wave
+    pcm16 = (np.clip(wav, -1.0, 1.0) * 32767).astype(np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(pcm16.tobytes())
+    return {
+        "audio": base64.b64encode(buf.getvalue()).decode("ascii"),
+        "sample_rate": int(sr),
+        "samples": int(len(wav)),
+        "latency_ms": int(dur),
+    }
+
+
 def list_voices() -> list[str]:
     """Return the voices the current Kokoro model knows about."""
     try:

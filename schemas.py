@@ -224,6 +224,12 @@ class SpeakResponse(BaseModel):
     latency_ms: int
 
 
+class CloneVoiceRequest(BaseModel):
+    ref_audio: str = Field(..., description="Base64 audio (5-15 s of reference speech)")
+    ref_text: str = Field(..., min_length=2, max_length=500, description="Exact transcript of the reference audio")
+    gen_text: str = Field(..., min_length=1, max_length=800, description="Text to speak in the cloned voice")
+
+
 class ToolExecRequest(BaseModel):
     command: str = Field(..., min_length=1, max_length=4000)
     cwd: str | None = Field(None, max_length=500)

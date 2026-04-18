@@ -53,6 +53,7 @@ from schemas import (
     ScanRequest,
     ScanResponse,
     SetModelRequest,
+    CloneVoiceRequest,
     SpeakRequest,
     SpeakResponse,
     ToolExecRequest,
@@ -658,6 +659,20 @@ async def speak_endpoint(request: SpeakRequest) -> SpeakResponse:
         log.error(f"/speak !! {err}")
         raise HTTPException(status_code=500, detail=str(err)) from err
     log.info(f"/speak -> {res['latency_ms']}ms samples={res['samples']}")
+    return SpeakResponse(**res)
+
+
+@app.post("/voice-clone", response_model=SpeakResponse)
+async def voice_clone_endpoint(request: CloneVoiceRequest) -> SpeakResponse:
+    import audio as _audio
+    try:
+        res = await asyncio.to_thread(
+            _audio.clone_voice, request.ref_audio, request.ref_text, request.gen_text,
+        )
+    except Exception as err:
+        log.error(f"/voice-clone !! {err}")
+        raise HTTPException(status_code=500, detail=str(err)) from err
+    log.info(f"/voice-clone -> {res['latency_ms']}ms samples={res['samples']}")
     return SpeakResponse(**res)
 
 

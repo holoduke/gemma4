@@ -594,9 +594,101 @@ micBtn.addEventListener("mouseup", stopRecording);
 micBtn.addEventListener("mouseleave", stopRecording);
 micBtn.addEventListener("touchend", stopRecording);
 
-/* ---------- Speak button on bot messages (Kokoro TTS) ---------- */
+/* ---------- Voice clone (F5-TTS) — hold to record 8-15s, then SPEAK uses your voice ---------- */
+const cloneBtn = document.getElementById("clone-btn");
+let cloneRecorder = null;
+let cloneChunks = [];
+let cloneStream = null;
+
+async function startCloneRecording() {
+  try {
+    cloneStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    cloneChunks = [];
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
+    cloneRecorder = new MediaRecorder(cloneStream, mime ? { mimeType: mime } : {});
+    cloneRecorder.ondataavailable = (e) => { if (e.data.size > 0) cloneChunks.push(e.data); };
+    cloneRecorder.onstop = async () => {
+      cloneStream.getTracks().forEach((t) => t.stop());
+      cloneStream = null;
+      const blob = new Blob(cloneChunks, { type: cloneRecorder.mimeType });
+      const buf = await blob.arrayBuffer();
+      const b64 = _bytesToBase64(new Uint8Array(buf));
+      cloneBtn.classList.remove("recording");
+      cloneBtn.textContent = "…";
+      try {
+        // Transcribe first so we have the reference text for F5-TTS.
+        const tRes = await fetch("/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ audio: b64 }),
+        });
+        if (!tRes.ok) throw new Error(`STT HTTP ${tRes.status}`);
+        const t = await tRes.json();
+        if (!t.text || t.text.length < 3) throw new Error("could not transcribe reference audio");
+        voiceClone.ref_audio = b64;
+        voiceClone.ref_text = t.text;
+        cloneBtn.classList.add("active");
+        cloneBtn.title = `Cloned voice loaded (${t.text.length} chars of reference). Click to clear.`;
+        const line = `🎭 voice clone loaded · ref: "${t.text.slice(0, 60)}..."`;
+        if (document.body.classList.contains("mode-video")) appendFeed(line, "scan");
+        else addMessage("sys", line);
+      } catch (err) {
+        const line = `[CLONE ERR] ${err.message}`;
+        if (document.body.classList.contains("mode-video")) appendFeed(line, "err");
+        else addMessage("sys", line);
+      } finally {
+        cloneBtn.textContent = "🎭";
+      }
+    };
+    cloneRecorder.start();
+    cloneBtn.classList.add("recording");
+    cloneBtn.textContent = "●";
+  } catch (err) {
+    alert(`mic failed: ${err.message}`);
+  }
+}
+function stopCloneRecording() {
+  if (cloneRecorder && cloneRecorder.state !== "inactive") {
+    cloneRecorder.stop();
+    cloneRecorder = null;
+  }
+}
+cloneBtn.addEventListener("mousedown", (e) => {
+  // Short click when already loaded = clear the clone
+  if (voiceClone.ref_audio && !e.shiftKey) {
+    // Hold 300ms threshold — if the button is released quickly, treat as clear.
+    const holdStart = performance.now();
+    const onUp = () => {
+      cloneBtn.removeEventListener("mouseup", onUp);
+      if (performance.now() - holdStart < 300 && cloneRecorder == null) {
+        // quick click: clear
+        voiceClone.ref_audio = null;
+        voiceClone.ref_text = null;
+        cloneBtn.classList.remove("active");
+        cloneBtn.title = "Hold to record a voice sample (F5-TTS voice cloning)";
+        const line = "🎭 voice clone cleared";
+        if (document.body.classList.contains("mode-video")) appendFeed(line, "scan");
+        else addMessage("sys", line);
+      } else {
+        stopCloneRecording();
+      }
+    };
+    cloneBtn.addEventListener("mouseup", onUp);
+    // also start recording in case they hold
+    startCloneRecording();
+  } else {
+    startCloneRecording();
+  }
+});
+cloneBtn.addEventListener("mouseleave", stopCloneRecording);
+cloneBtn.addEventListener("touchstart", startCloneRecording, { passive: true });
+cloneBtn.addEventListener("touchend", stopCloneRecording);
+
+/* ---------- Speak button on bot messages (Kokoro TTS OR cloned voice) ---------- */
 let _speakAudio = null;
 let _speakBtn = null;
+// Populated by the 🎭 clone button. When set, SPEAK uses F5-TTS voice cloning.
+const voiceClone = { ref_audio: null, ref_text: null };
 
 async function speakText(text, btn) {
   if (_speakAudio) {
@@ -607,25 +699,30 @@ async function speakText(text, btn) {
   btn.classList.add("playing");
   btn.textContent = "⏹ STOP";
   _speakBtn = btn;
+  const useClone = voiceClone.ref_audio && voiceClone.ref_text;
+  const path = useClone ? "/voice-clone" : "/speak";
+  const body = useClone
+    ? { ref_audio: voiceClone.ref_audio, ref_text: voiceClone.ref_text, gen_text: text.slice(0, 800) }
+    : { text: text.slice(0, 900) };
   try {
-    const res = await fetch("/speak", {
+    const res = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: text.slice(0, 900) }),
+      body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 160)}`);
     const data = await res.json();
     if (data.latency_ms != null) setStat("s-op-tts", `${data.latency_ms} ms`);
     _speakAudio = new Audio(`data:audio/wav;base64,${data.audio}`);
     _speakAudio.onended = () => {
       btn.classList.remove("playing");
-      btn.textContent = "♪ SPEAK";
+      btn.textContent = useClone ? "♪ SPEAK (clone)" : "♪ SPEAK";
       _speakAudio = null;
     };
     _speakAudio.play();
   } catch (err) {
     btn.classList.remove("playing");
-    btn.textContent = "♪ SPEAK";
+    btn.textContent = useClone ? "♪ SPEAK (clone)" : "♪ SPEAK";
     setStat("s-op-tts", "err");
     console.warn("TTS failed:", err);
   }
