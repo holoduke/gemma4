@@ -34,7 +34,7 @@ class InpaintRequest(BaseModel):
     height: int | None = Field(None, ge=64, le=2048)
     steps: int = Field(4, ge=1, le=30)
     guidance: float = Field(4.0, ge=0.0, le=15.0)
-    max_size: int = Field(640, ge=256, le=1024)
+    max_size: int = Field(640, ge=128, le=1024)
     feather: int = Field(9, ge=0, le=40)
 
 
@@ -55,7 +55,7 @@ class Img2ImgRequest(BaseModel):
     strength: float = Field(0.7, ge=0.1, le=1.0, description="How much to deviate from the source")
     steps: int | None = Field(None, ge=1, le=30)
     guidance: float | None = Field(None, ge=0.0, le=15.0)
-    max_size: int = Field(640, ge=256, le=1024)
+    max_size: int = Field(640, ge=128, le=1024)
 
 
 class Img2ImgResponse(BaseModel):
@@ -72,7 +72,7 @@ class Img2ImgResponse(BaseModel):
 class PoseRequest(BaseModel):
     image: str = Field(..., description="Base64 JPEG/PNG")
     conf: float = Field(0.3, ge=0.05, le=0.95)
-    imgsz: int = Field(480, ge=256, le=1024)
+    imgsz: int = Field(480, ge=128, le=1024)
 
 
 class PoseResponse(BaseModel):
@@ -140,7 +140,7 @@ class PeopleSegResponse(BaseModel):
 
 class SegmentAllRequest(BaseModel):
     image: str = Field(..., description="Base64 JPEG/PNG")
-    imgsz: int = Field(480, ge=256, le=1024)
+    imgsz: int = Field(480, ge=128, le=1024)
     conf: float = Field(0.4, ge=0.05, le=0.95)
 
 
@@ -241,7 +241,7 @@ class DetectRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
     conf: float = Field(0.08, ge=0.01, le=0.9)
     masks: bool = True
-    imgsz: int = Field(480, ge=256, le=1024)
+    imgsz: int = Field(480, ge=128, le=1024)
     track: bool = Field(False, description="ByteTrack stable IDs across frames")
 
 
