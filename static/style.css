@@ -521,34 +521,14 @@ body.mode-video .bar-mini { width: 24px; }
   position: relative;
   overflow: hidden;
 }
-.stats::before {
-  content: "// TELEMETRY";
-  display: block;
-  color: var(--magenta);
-  text-shadow: 0 0 6px rgba(255, 43, 214, 0.4);
-  font-family: "Orbitron", sans-serif;
-  font-weight: 700;
-  font-size: 11px;
-  letter-spacing: 2px;
-  padding-bottom: 10px;
-  border-bottom: 1px dashed rgba(0, 240, 255, 0.25);
-  margin-bottom: 6px;
-}
+.stats::before { display: none; }
 .stat-group {
   padding-bottom: 6px;
   border-bottom: 1px dotted rgba(0, 240, 255, 0.15);
   margin-bottom: 6px;
 }
 .stat-group:last-child { border-bottom: 0; margin-bottom: 0; }
-.stat-group-title {
-  font-family: "Orbitron", sans-serif;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 2px;
-  color: var(--cyan);
-  text-shadow: 0 0 5px rgba(0, 240, 255, 0.35);
-  padding: 2px 0 4px;
-}
+.stat-group-title { display: none; }
 .stat-total {
   border-top: 1px dashed rgba(255, 43, 214, 0.35);
   margin-top: 4px;
