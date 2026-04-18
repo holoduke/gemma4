@@ -1262,9 +1262,12 @@ function _drawPoseOn(ctx, data) {
 
 function _drawHeadPoseCube(ctx, f) {
   if (f.yaw == null) return;
-  const yaw   = (f.yaw   * Math.PI) / 180;
-  const pitch = (f.pitch * Math.PI) / 180;
-  const roll  = (f.roll  * Math.PI) / 180;
+  // OpenCV solvePnP returns yaw/roll with the opposite handedness of our
+  // canvas draw space (OpenCV: Y-down, Z-forward; canvas: Y-down, no Z).
+  // Negate yaw + roll so the cube rotates *with* the head, not against it.
+  const yaw   = (-f.yaw   * Math.PI) / 180;
+  const pitch = ( f.pitch * Math.PI) / 180;
+  const roll  = (-f.roll  * Math.PI) / 180;
   // Wrap the cube around the head: centre it on the face box and size it
   // so the unrotated cube just encloses the box.
   const [x1, y1, x2, y2] = f.box;
