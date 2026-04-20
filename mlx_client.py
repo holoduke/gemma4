@@ -39,6 +39,34 @@ MLX_MODELS: dict[str, dict] = {
         "quantization": "q8",
         "size_gb": 6.1,
     },
+    "mlx:gemma-4-e4b-it-8bit": {
+        "repo": "mlx-community/gemma-4-E4B-it-8bit",
+        "label": "MLX · Gemma 4 E4B-IT 8bit",
+        "parameter_size": "8.0B",
+        "quantization": "q8",
+        "size_gb": 8.4,
+    },
+    "mlx:gemma-4-e4b-it-ud-4bit": {
+        "repo": "unsloth/gemma-4-E4B-it-UD-MLX-4bit",
+        "label": "MLX · Gemma 4 E4B-IT UD 4bit (Unsloth)",
+        "parameter_size": "8.0B",
+        "quantization": "q4-ud",
+        "size_gb": 6.2,
+    },
+    "mlx:gemma-4-26b-a4b-it-4bit": {
+        "repo": "mlx-community/gemma-4-26b-a4b-it-4bit",
+        "label": "MLX · Gemma 4 26B-A4B-IT 4bit (MoE)",
+        "parameter_size": "26B MoE (~3.8B active)",
+        "quantization": "q4",
+        "size_gb": 15.0,
+    },
+    "mlx:gemma-4-26b-a4b-it-ud-4bit": {
+        "repo": "unsloth/gemma-4-26b-a4b-it-UD-MLX-4bit",
+        "label": "MLX · Gemma 4 26B-A4B-IT UD 4bit (Unsloth MoE)",
+        "parameter_size": "26B MoE (~3.8B active)",
+        "quantization": "q4-ud",
+        "size_gb": 15.0,
+    },
 }
 
 
