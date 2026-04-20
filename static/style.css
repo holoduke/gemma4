@@ -177,6 +177,9 @@ body.mode-chat .cam-feed-panel { display: none; }
 body.mode-chat .bar-line-res { display: none; }
 body.mode-chat .model-selects > .model-select:not(:first-child) { display: none; }
 
+/* Video-pipeline telemetry is meaningless in chat mode. */
+body.mode-chat .stats .video-only { display: none; }
+
 /* ---------- VIDEO MODE ---------- */
 body.mode-video .frame {
   grid-template-columns: 300px 1fr 340px;
