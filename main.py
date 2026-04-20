@@ -169,6 +169,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
     if request.stream:
         raise HTTPException(status_code=400, detail="Use /chat/stream for streaming")
     model = request.model or _STATE["emma"]
+    if request.tools and mlx_client.is_mlx_name(model):
+        model = "gemma4:e2b"
     msgs = [m.model_dump(exclude_none=True) for m in request.messages]
     n_msgs, n_chars = _prompt_stats(msgs)
     backend = _dispatch(model)
@@ -218,10 +220,14 @@ async def chat(request: ChatRequest) -> ChatResponse:
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
     model = request.model or _STATE["emma"]
+    # MLX has no tool-calling path, so re-route tool requests to an Ollama
+    # model that does (gemma4:e2b supports tool_calls via Ollama's template).
+    if request.tools and mlx_client.is_mlx_name(model):
+        model = "gemma4:e2b"
     msgs = [m.model_dump(exclude_none=True) for m in request.messages]
     n_msgs, n_chars = _prompt_stats(msgs)
     backend = _dispatch(model)
-    log.info(f"/chat/stream <- model={model} msgs={n_msgs} chars={n_chars} think={request.think} backend={'mlx' if backend is mlx_client else 'ollama'}")
+    log.info(f"/chat/stream <- model={model} msgs={n_msgs} chars={n_chars} think={request.think} tools={bool(request.tools)} backend={'mlx' if backend is mlx_client else 'ollama'}")
 
     async def event_stream():
         t0 = time.perf_counter()
