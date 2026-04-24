@@ -89,6 +89,41 @@ def _resolve_repo(name: str) -> str:
     return name.removeprefix("mlx:")
 
 
+def _mlx_empty_cache() -> None:
+    """Flush the MLX Metal cache. Newer MLX exposes clear_cache at the
+    top level; older builds had it under .metal. Silent on failure."""
+    import gc
+    gc.collect()
+    try:
+        import mlx.core as mx
+        if hasattr(mx, "clear_cache"):
+            mx.clear_cache()
+        else:
+            mx.metal.clear_cache()
+    except Exception:
+        pass
+
+
+def unload_all() -> int:
+    """Drop all MLX models to free unified memory. Returns count freed."""
+    n = len(_loaded)
+    _loaded.clear()
+    _mlx_empty_cache()
+    if n:
+        log.info(f"unloaded {n} MLX model(s)")
+    return n
+
+
+def unload_model(name: str) -> bool:
+    """Drop a single MLX model by name. Returns True if it was loaded."""
+    if name not in _loaded:
+        return False
+    del _loaded[name]
+    _mlx_empty_cache()
+    log.info(f"unloaded MLX model {name}")
+    return True
+
+
 async def _ensure_loaded(name: str):
     async with _load_lock:
         if name in _loaded:

@@ -17,3 +17,9 @@ __pycache__/
 # Test / log artefacts
 /tmp/
 *.log
+
+# Runtime state (per-user, regenerated on boot)
+chatlm.db
+chatlm.db-shm
+chatlm.db-wal
+storage/

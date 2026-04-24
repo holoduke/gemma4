@@ -155,27 +155,33 @@ body {
 .log             { grid-area: log; }
 .composer        { grid-area: input; }
 .stats           { grid-area: stats; }
+.sessions-pane   { grid-area: sessions; }
 .cam-video-panel { grid-area: video; }
 .cam-view        { grid-area: controls; }
 .cam-feed-panel  { grid-area: feed; }
 
 /* ---------- CHAT MODE ---------- */
 body.mode-chat .frame {
-  grid-template-columns: 1fr 260px;
+  grid-template-columns: 220px 1fr;
   grid-template-rows: auto 1fr auto;
   grid-template-areas:
-    "bar    bar"
-    "log    stats"
-    "input  stats";
+    "bar       bar"
+    "sessions  log"
+    "sessions  input";
 }
 body.mode-chat .cam-video-panel,
 body.mode-chat .cam-view,
-body.mode-chat .cam-feed-panel { display: none; }
+body.mode-chat .cam-feed-panel,
+body.mode-chat .stats { display: none; }
+body.mode-video .sessions-pane,
+body.mode-video .bar-stats { display: none; }
 
 /* In chat mode, vision/detect/segment/inpaint are irrelevant —
    keep only EMMA (the chat model) and hide the resolution row. */
 body.mode-chat .bar-line-res { display: none; }
 body.mode-chat .model-selects > .model-select:not(:first-child) { display: none; }
+/* PAINT controls /image + the generate_image tool — useful in chat. */
+body.mode-chat .model-selects > .model-select:has(#select-txt2img) { display: flex; }
 
 /* Video-pipeline telemetry is meaningless in chat mode. */
 body.mode-chat .stats .video-only { display: none; }
@@ -253,6 +259,33 @@ body.mode-video .bar-mini { width: 24px; }
 }
 .bar-spacer { flex: 1 1 auto; }  /* pushes status/toggles to the right on line 1 */
 .bar-line-selects .model { margin-left: auto; }
+
+/* Inline telemetry chips next to the model name (chat mode only).
+   The full stats panel is hidden in chat mode — these chips give you
+   the load-at-a-glance numbers without burning a whole right column. */
+.bar-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 12px;
+  margin-left: 4px;
+  border-left: 1px solid var(--panel-edge);
+}
+.bar-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.bar-stat .k { font-weight: 600; }
+.bar-stat b {
+  font-weight: 500;
+  color: var(--cyan);
+  font-variant-numeric: tabular-nums;
+}
 .bar-line-res .model-select span { color: var(--amber); }
 .bar-line-res .model-select select { border-color: rgba(255, 176, 0, 0.35); color: var(--amber); }
 
@@ -430,6 +463,53 @@ body.mode-video .bar-mini { width: 24px; }
   outline: 1px solid var(--cyan);
   background: rgba(0, 0, 0, 0.7);
 }
+.tool-call-image {
+  border-color: rgba(255, 43, 214, 0.55);
+  background: rgba(255, 43, 214, 0.06);
+}
+.tool-call-image .tool-call-head { color: var(--magenta); }
+.tool-call-image-out {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 8px 0 4px;
+  border: 1px solid var(--panel-edge);
+  cursor: zoom-in;
+}
+.txt2img-progress {
+  margin: 8px 0 4px;
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: var(--magenta);
+}
+.txt2img-progress-label {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  opacity: 0.85;
+}
+.txt2img-progress-bar {
+  height: 6px;
+  background: rgba(255, 43, 214, 0.12);
+  border: 1px solid rgba(255, 43, 214, 0.4);
+  position: relative;
+  overflow: hidden;
+}
+.txt2img-progress-fill {
+  position: absolute;
+  inset: 0 100% 0 0;
+  background: linear-gradient(90deg, var(--magenta), var(--cyan));
+  transition: right 0.3s ease;
+}
+.txt2img-progress-bar.indeterminate .txt2img-progress-fill {
+  right: 70%;
+  animation: txt2img-march 1.1s linear infinite;
+}
+@keyframes txt2img-march {
+  0%   { left: -30%; right: 100%; }
+  50%  { left: 30%;  right: 30%;  }
+  100% { left: 100%; right: -30%; }
+}
 .tool-call-actions {
   display: flex;
   gap: 6px;
@@ -594,13 +674,16 @@ body.mode-video .bar-mini { width: 24px; }
   font-size: 15px;
 }
 
+/* Body text uses the theme's --text token so the light theme stays
+   readable. The neon role identity comes from --who-- color + the
+   left border, which are theme-aware via --cyan / --magenta. */
 .msg.user .body {
-  color: #e9f7ff;
+  color: var(--text);
   border-left: 2px solid var(--cyan);
   padding-left: 10px;
 }
 .msg.bot .body {
-  color: #ffe9fa;
+  color: var(--text);
   border-left: 2px solid var(--magenta);
   padding-left: 10px;
 }
@@ -1249,7 +1332,7 @@ body.track-armed .track-props { display: flex; }
   text-shadow: 0 0 4px rgba(255, 43, 214, 0.35);
 }
 .model-select select {
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--panel);
   color: var(--cyan);
   border: 1px solid rgba(0, 240, 255, 0.35);
   padding: 4px 6px;
@@ -1326,6 +1409,7 @@ body.track-armed .track-props { display: flex; }
       "input";
   }
   .stats { max-height: 140px; overflow-y: auto; }
+  .sessions-pane { display: none; }
 }
 
 @media (max-width: 640px) {
@@ -1333,3 +1417,166 @@ body.track-armed .track-props { display: flex; }
   .logo { font-size: 16px; }
   .model { display: none; }
 }
+
+/* ---------- SESSIONS SIDEBAR (chat mode) ---------- */
+.sessions-pane {
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  padding: 10px;
+  gap: 8px;
+  min-height: 0;
+}
+.sessions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--panel-edge);
+  padding-bottom: 6px;
+}
+.sessions-title {
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+}
+.session-new {
+  background: transparent;
+  color: var(--cyan);
+  border: 1px solid var(--cyan);
+  padding: 2px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+.session-new:hover { background: rgba(0, 200, 255, 0.12); }
+.sessions-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-dim);
+  transition: background 0.1s, border-color 0.1s;
+}
+.session-item:hover { background: rgba(128, 128, 128, 0.12); }
+.session-item.active {
+  border-color: var(--cyan);
+  background: rgba(0, 200, 255, 0.08);
+  color: var(--text);
+}
+.session-item-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-item-count {
+  font-size: 10px;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+.session-item-del {
+  visibility: hidden;
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  line-height: 1;
+}
+.session-item:hover .session-item-del { visibility: visible; }
+.session-item-del:hover { color: var(--magenta); }
+
+/* ---------- MCP section (below sessions) ---------- */
+.mcp-head { margin-top: 4px; border-top: 1px dashed var(--panel-edge); padding-top: 10px; }
+.mcp-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0;
+}
+.mcp-add-form input {
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--text);
+  padding: 4px 6px;
+  font-family: "Share Tech Mono", ui-monospace, monospace;
+  font-size: 11px;
+}
+.mcp-add-form input:focus {
+  outline: none;
+  border-color: var(--cyan);
+}
+.mcp-add-actions { display: flex; gap: 4px; }
+.mcp-cancel { border-color: var(--panel-edge); color: var(--text-dim); }
+.mcp-list .session-item {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.mcp-list .session-item-title { font-weight: 600; }
+.mcp-list .mcp-meta {
+  flex-basis: 100%;
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mcp-list .session-item.disabled { opacity: 0.5; }
+.mcp-list .session-item.error { border-color: var(--danger); }
+.mcp-toggle {
+  background: transparent;
+  border: 1px solid var(--cyan);
+  color: var(--cyan);
+  padding: 1px 6px;
+  font-size: 9px;
+  cursor: pointer;
+  letter-spacing: 1px;
+}
+.mcp-toggle.off { border-color: var(--text-dim); color: var(--text-dim); }
+
+/* ---------- AUTO-APPROVE checkbox (model bar) ---------- */
+.auto-approve {
+  display: none; /* shown only when body.tools-on */
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: var(--magenta);
+  cursor: pointer;
+  user-select: none;
+}
+body.tools-on .auto-approve { display: inline-flex; }
+.auto-approve input { accent-color: var(--magenta); margin: 0; }
+.auto-approve.armed { color: var(--magenta); text-shadow: 0 0 4px var(--magenta); }
+
+.mem-purge {
+  background: transparent;
+  color: var(--amber);
+  border: 1px solid rgba(255, 176, 0, 0.45);
+  padding: 3px 9px;
+  font-family: "Orbitron", sans-serif;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  cursor: pointer;
+  margin-left: 4px;
+}
+.mem-purge:hover { background: rgba(255, 176, 0, 0.12); }
+.mem-purge:disabled { opacity: 0.5; cursor: progress; }

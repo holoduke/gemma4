@@ -54,13 +54,35 @@ applyThink();
 /* ---------- tool use ---------- */
 const toolsEl = document.getElementById("tools-toggle");
 let toolsOn = localStorage.getItem("chatlm.tools") === "1";
+const autoApproveEl = document.getElementById("auto-approve");
+const autoApproveWrap = document.getElementById("auto-approve-wrap");
+let autoApproveOn = localStorage.getItem("chatlm.autoApprove") === "1";
+
 function applyTools() {
   toolsEl.setAttribute("aria-pressed", toolsOn ? "true" : "false");
+  // Toggle body class so the AUTO-APPROVE checkbox only renders when tools
+  // are enabled (it has no effect otherwise).
+  document.body.classList.toggle("tools-on", toolsOn);
+  // When tools get switched off, also disarm auto-approve so re-enabling
+  // tools later starts safe (avoids surprise auto-execution).
+  if (!toolsOn && autoApproveOn) {
+    autoApproveOn = false;
+    localStorage.setItem("chatlm.autoApprove", "0");
+    autoApproveEl.checked = false;
+    autoApproveWrap.classList.remove("armed");
+  }
 }
 toolsEl.addEventListener("click", () => {
   toolsOn = !toolsOn;
   localStorage.setItem("chatlm.tools", toolsOn ? "1" : "0");
   applyTools();
+});
+autoApproveEl.checked = autoApproveOn;
+autoApproveWrap.classList.toggle("armed", autoApproveOn);
+autoApproveEl.addEventListener("change", () => {
+  autoApproveOn = autoApproveEl.checked;
+  localStorage.setItem("chatlm.autoApprove", autoApproveOn ? "1" : "0");
+  autoApproveWrap.classList.toggle("armed", autoApproveOn);
 });
 applyTools();
 
@@ -69,10 +91,17 @@ const SHELL_TOOL = {
   function: {
     name: "run_shell",
     description:
-      "Run a single shell command on the user's local macOS machine and return its stdout, stderr and exit code. " +
-      "The user must approve every command before it executes. Useful for: listing/reading files (ls, cat, head, grep, find), " +
-      "checking git state (git status, git log, git diff), inspecting system (ps, df, uname), fetching URLs (curl), " +
-      "running language tools (python -c, node -e). Prefer read-only commands. Do not chain destructive operations.",
+      "Execute a single shell command on the user's local macOS machine and receive stdout, stderr, exit code. " +
+      "The user owns this machine and sees an APPROVE/DENY card for every command before it runs — consent is built in. " +
+      "USE THIS WHENEVER the user asks about local files/folders/processes/git/system info. " +
+      "Examples that REQUIRE this tool, not a refusal: " +
+      "'look in my Downloads folder' → ls -la ~/Downloads ; " +
+      "'what's in this dir' → ls ; " +
+      "'show recent commits' → git log --oneline -10 ; " +
+      "'check disk space' → df -h ; " +
+      "'find pdfs from last week' → find ~/Documents -name '*.pdf' -mtime -7 . " +
+      "Do NOT say 'I cannot access your filesystem' — you can, via this tool. Do NOT ask the user to run it themselves. " +
+      "Prefer read-only commands; never chain destructive ops without explaining first.",
     parameters: {
       type: "object",
       properties: {
@@ -86,6 +115,32 @@ const SHELL_TOOL = {
   },
 };
 
+const IMAGE_TOOL = {
+  type: "function",
+  function: {
+    name: "generate_image",
+    description:
+      "Generate a brand-new image from a text prompt using a local diffusion model " +
+      "(Stable Diffusion XL / FLUX.1-schnell / SD 3.5). Use this when the user asks " +
+      "you to 'create', 'make', 'draw', 'render', or 'generate' a picture/photo/illustration. " +
+      "The user must approve before generation runs (~5-30s wall time).",
+    parameters: {
+      type: "object",
+      properties: {
+        prompt: {
+          type: "string",
+          description: "Rich description of the image to create. Include subject, style, mood, composition.",
+        },
+        negative_prompt: {
+          type: "string",
+          description: "Optional: things to avoid in the image (ignored for FLUX).",
+        },
+      },
+      required: ["prompt"],
+    },
+  },
+};
+
 const TOOL_IMPLS = {
   run_shell: (args) =>
     fetch("/tools/exec", {
@@ -93,6 +148,9 @@ const TOOL_IMPLS = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ command: args.command, timeout: 60 }),
     }).then((r) => (r.ok ? r.json() : r.text().then((t) => Promise.reject(new Error(t))))),
+  // `generate_image` deliberately lives in handleGenerateImage() — it
+  // needs progress streaming, the approve card, session binding. Keep
+  // TOOL_IMPLS for tools whose UI is "just fire and render the result".
 };
 
 function formatToolResult(res) {
@@ -106,19 +164,26 @@ function approveCommand(toolCall, container) {
     const initialCmd = String(args.command ?? "");
     const card = document.createElement("div");
     card.className = "tool-call";
+    const headLabel = autoApproveOn ? "// TOOL · RUN_SHELL · AUTO" : "// TOOL · RUN_SHELL";
     card.innerHTML = `
-      <div class="tool-call-head">// TOOL · RUN_SHELL</div>
-      <code class="tool-call-cmd" contenteditable="true" spellcheck="false"></code>
-      <div class="tool-call-actions">
-        <button type="button" class="approve-btn">APPROVE</button>
-        <button type="button" class="deny-btn">DENY</button>
-      </div>`;
+      <div class="tool-call-head">${headLabel}</div>
+      <code class="tool-call-cmd" contenteditable="${autoApproveOn ? "false" : "true"}" spellcheck="false"></code>
+      <div class="tool-call-actions"></div>`;
     const cmdEl = card.querySelector(".tool-call-cmd");
     cmdEl.textContent = initialCmd;
-    const approve = card.querySelector(".approve-btn");
-    const deny = card.querySelector(".deny-btn");
     container.appendChild(card);
     scrollBottom();
+    if (autoApproveOn) {
+      // Resolve on next tick so the card paints before execution starts.
+      setTimeout(() => resolve({ decision: "approve", command: initialCmd, card }), 0);
+      return;
+    }
+    const actions = card.querySelector(".tool-call-actions");
+    actions.innerHTML = `
+      <button type="button" class="approve-btn">APPROVE</button>
+      <button type="button" class="deny-btn">DENY</button>`;
+    const approve = actions.querySelector(".approve-btn");
+    const deny = actions.querySelector(".deny-btn");
     approve.addEventListener("click", () => {
       const finalCmd = cmdEl.textContent.trim();
       cmdEl.contentEditable = "false";
@@ -141,6 +206,208 @@ function renderToolResult(card, result, isError) {
   pre.textContent = result;
   card.appendChild(pre);
   scrollBottom();
+}
+
+function approveImagePrompt(args, container) {
+  return new Promise((resolve) => {
+    const initialPrompt = String(args.prompt ?? "");
+    const card = document.createElement("div");
+    card.className = "tool-call tool-call-image";
+    const headLabel = autoApproveOn ? "// TOOL · GENERATE_IMAGE · AUTO" : "// TOOL · GENERATE_IMAGE";
+    card.innerHTML = `
+      <div class="tool-call-head">${headLabel}</div>
+      <div class="tool-call-cmd" contenteditable="${autoApproveOn ? "false" : "true"}" spellcheck="false"></div>
+      <div class="tool-call-actions"></div>`;
+    const promptEl = card.querySelector(".tool-call-cmd");
+    promptEl.textContent = initialPrompt;
+    container.appendChild(card);
+    scrollBottom();
+    if (autoApproveOn) {
+      setTimeout(() => resolve({ decision: "approve", prompt: initialPrompt, card }), 0);
+      return;
+    }
+    const actions = card.querySelector(".tool-call-actions");
+    actions.innerHTML = `
+      <button type="button" class="approve-btn">PAINT</button>
+      <button type="button" class="deny-btn">DENY</button>`;
+    const approve = actions.querySelector(".approve-btn");
+    const deny = actions.querySelector(".deny-btn");
+    approve.addEventListener("click", () => {
+      const finalPrompt = promptEl.textContent.trim();
+      promptEl.contentEditable = "false";
+      approve.remove();
+      deny.remove();
+      resolve({ decision: "approve", prompt: finalPrompt, card });
+    });
+    deny.addEventListener("click", () => {
+      promptEl.contentEditable = "false";
+      approve.remove();
+      deny.remove();
+      resolve({ decision: "deny", prompt: initialPrompt, card });
+    });
+  });
+}
+
+/* Approval modal for an MCP tool call. Shows the mangled tool name and
+ * the JSON args (editable — user can tweak before send). Auto-approves
+ * like the other handlers when AUTO-APPROVE is armed. */
+function approveMcpCall(toolName, args, container) {
+  return new Promise((resolve) => {
+    const initialJson = JSON.stringify(args, null, 2);
+    const card = document.createElement("div");
+    card.className = "tool-call";
+    const headLabel = autoApproveOn ? `${toolName} · AUTO` : toolName;
+    card.innerHTML = `
+      <div class="tool-call-head">// MCP · ${headLabel}</div>
+      <code class="tool-call-cmd" contenteditable="${autoApproveOn ? "false" : "true"}" spellcheck="false"></code>
+      <div class="tool-call-actions"></div>`;
+    const argsEl = card.querySelector(".tool-call-cmd");
+    argsEl.textContent = initialJson;
+    container.appendChild(card);
+    scrollBottom();
+    const finish = (decision) => {
+      let parsed = args;
+      try {
+        parsed = JSON.parse(argsEl.textContent.trim() || "{}");
+      } catch (err) {
+        // Fallback to the original args — don't fail the whole call on
+        // a user typo; backend validation will complain if needed.
+      }
+      argsEl.contentEditable = "false";
+      resolve({ decision, args: parsed, card });
+    };
+    if (autoApproveOn) {
+      setTimeout(() => finish("approve"), 0);
+      return;
+    }
+    const actions = card.querySelector(".tool-call-actions");
+    actions.innerHTML = `
+      <button type="button" class="approve-btn">CALL</button>
+      <button type="button" class="deny-btn">DENY</button>`;
+    actions.querySelector(".approve-btn").addEventListener("click", () => {
+      actions.innerHTML = "";
+      finish("approve");
+    });
+    actions.querySelector(".deny-btn").addEventListener("click", () => {
+      actions.innerHTML = "";
+      finish("deny");
+    });
+  });
+}
+
+/* Real per-step progress block, driven by the /txt2img/stream SSE feed.
+ * The bar starts in indeterminate "march" mode (the diffusion pipe may
+ * be cold-loading from disk for 10-20 s before the first step fires),
+ * then snaps to truthful step-count progress once events arrive. */
+function startGenProgress(card, presetHint) {
+  const preset = presetHint || selTxt2img?.value || "sdxl-turbo";
+  const wrap = document.createElement("div");
+  wrap.className = "txt2img-progress";
+  wrap.innerHTML = `
+    <div class="txt2img-progress-label">
+      <span class="txt2img-progress-status">LOADING · ${preset.toUpperCase()}</span>
+      <span class="txt2img-progress-elapsed">0.0s</span>
+    </div>
+    <div class="txt2img-progress-bar indeterminate">
+      <div class="txt2img-progress-fill"></div>
+    </div>`;
+  card.appendChild(wrap);
+  const fill = wrap.querySelector(".txt2img-progress-fill");
+  const elapsedEl = wrap.querySelector(".txt2img-progress-elapsed");
+  const statusEl = wrap.querySelector(".txt2img-progress-status");
+  const bar = wrap.querySelector(".txt2img-progress-bar");
+  const t0 = performance.now();
+  const elapsedTimer = setInterval(() => {
+    elapsedEl.textContent = `${((performance.now() - t0) / 1000).toFixed(1)}s`;
+  }, 120);
+  return {
+    onStep(step, total) {
+      bar.classList.remove("indeterminate");
+      const pct = (step / total) * 100;
+      fill.style.right = `${100 - pct}%`;
+      statusEl.textContent = `PAINTING · ${preset.toUpperCase()} · ${step}/${total}`;
+    },
+    stop() {
+      clearInterval(elapsedTimer);
+      wrap.remove();
+    },
+  };
+}
+
+/* Drives the SSE/NDJSON stream from /txt2img/stream — yields per-step
+ * events to onStep and resolves with the final 'done' payload. Throws
+ * the upstream message when the server emits {type:"error"}. */
+async function streamTxt2img({ prompt, sessionId, onStep }) {
+  const res = await fetch("/txt2img/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, session_id: sessionId || null }),
+  });
+  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      let evt;
+      try { evt = JSON.parse(line); } catch { continue; }
+      if (evt.type === "step") onStep?.(evt.step, evt.total);
+      else if (evt.type === "done") return evt;
+      else if (evt.type === "error") throw new Error(evt.detail || "stream error");
+    }
+  }
+  throw new Error("stream ended without a 'done' event");
+}
+
+function renderImageResult(card, result) {
+  const img = document.createElement("img");
+  img.className = "tool-call-image-out";
+  // Prefer the on-disk URL (persistent); fall back to inline base64 so old
+  // session records and stateless callers still render.
+  img.src = result.image_url || `data:image/png;base64,${result.image}`;
+  img.alt = "generated image";
+  img.addEventListener("click", () => {
+    const w = window.open("", "_blank");
+    if (w) w.document.write(`<img src="${img.src}" style="max-width:100%;height:auto;">`);
+  });
+  card.appendChild(img);
+  scrollBottom();
+}
+
+/* Build an image-generation card in one place. Used by:
+ *   - tool-call flow (`generate_image` tool from the LLM)
+ *   - slash-command flow (`/image <prompt>`)
+ *   - session replay (persisted meta turned back into a card)
+ * Pass `result` for a finished image or omit it to get an empty card
+ * (the caller will then attach its own progress bar + image later).
+ * Returns the card element so the caller can attach progress/meta blocks. */
+function buildImageCard({ parent, prompt, result, headPrefix = "TOOL · GENERATE_IMAGE" }) {
+  const card = document.createElement("div");
+  card.className = "tool-call tool-call-image";
+  const head = document.createElement("div");
+  head.className = "tool-call-head";
+  const promptSnippet = prompt ? " · " + prompt.slice(0, 80).replace(/</g, "&lt;") : "";
+  head.textContent = `// ${headPrefix}${promptSnippet}`;
+  card.appendChild(head);
+  parent.appendChild(card);
+  if (result) {
+    renderImageResult(card, result);
+    if (result.preset) {
+      const bits = [result.preset];
+      if (result.width && result.height) bits.push(`${result.width}x${result.height}`);
+      if (result.steps) bits.push(`${result.steps} steps`);
+      if (result.latency_ms != null) bits.push(`${result.latency_ms} ms`);
+      renderToolMeta(card, bits.join(" · "));
+    }
+  }
+  return card;
 }
 
 function renderToolMeta(card, text) {
@@ -183,8 +450,351 @@ function addMessage(who, text, opts = {}) {
   wrap.appendChild(body);
   logEl.appendChild(wrap);
   scrollBottom();
+  if (opts.persist !== false && (who === "user" || who === "sys")) {
+    Sessions.persist(who, text || "", opts.images ? { images: opts.images } : null);
+  }
   return body;
 }
+
+/* ---------- Server-side session persistence ----------
+ * Chat history (text + uploaded user images + generated images) lives in
+ * SQLite via /sessions. Refresh-safe and survives uvicorn restarts.
+ * The Sessions module owns: the sidebar list, the active session id,
+ * creating/deleting/switching, and best-effort persisting of new turns. */
+const Sessions = (() => {
+  const STORAGE_KEY = "chatlm.session.active";
+  const listEl = document.getElementById("sessions-list");
+  const newBtn = document.getElementById("session-new");
+  let activeId = null;
+  let all = [];
+  let replaying = false;
+
+  async function refreshList() {
+    try {
+      const res = await fetch("/sessions");
+      const d = await res.json();
+      all = d.sessions || [];
+      render();
+    } catch (err) {
+      console.warn("[sessions] list failed", err);
+    }
+  }
+
+  function render() {
+    listEl.innerHTML = "";
+    for (const s of all) {
+      const li = document.createElement("li");
+      li.className = "session-item" + (s.id === activeId ? " active" : "");
+      li.dataset.id = s.id;
+      const titleEl = document.createElement("span");
+      titleEl.className = "session-item-title";
+      titleEl.textContent = s.title;
+      const countEl = document.createElement("span");
+      countEl.className = "session-item-count";
+      countEl.textContent = s.message_count || 0;
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "session-item-del";
+      delBtn.title = "Delete this session";
+      delBtn.textContent = "×";
+      li.append(titleEl, countEl, delBtn);
+      li.addEventListener("click", (e) => {
+        if (e.target === delBtn) return;
+        if (s.id !== activeId) switchTo(s.id);
+      });
+      delBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await deleteSession(s.id);
+      });
+      listEl.appendChild(li);
+    }
+  }
+
+  async function create(title) {
+    const res = await fetch("/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: title || null }),
+    });
+    const s = await res.json();
+    await refreshList();
+    return s;
+  }
+
+  async function deleteSession(id) {
+    await fetch(`/sessions/${id}`, { method: "DELETE" });
+    if (id === activeId) {
+      // Pick another or create a fresh one.
+      const remaining = all.filter((x) => x.id !== id);
+      if (remaining.length) {
+        await switchTo(remaining[0].id);
+      } else {
+        const fresh = await create("New chat");
+        await switchTo(fresh.id);
+        return; // refreshList already called inside create
+      }
+    }
+    await refreshList();
+  }
+
+  async function switchTo(id) {
+    activeId = id;
+    localStorage.setItem(STORAGE_KEY, id);
+    render();
+    await replay(id);
+  }
+
+  async function replay(id) {
+    replaying = true;
+    logEl.innerHTML = "";
+    try {
+      const res = await fetch(`/sessions/${id}/messages`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const d = await res.json();
+      for (const m of d.messages) {
+        const meta = m.meta || {};
+        if (m.role === "user") {
+          addMessage("user", m.content, { images: meta.images || [], persist: false });
+        } else if (m.role === "sys") {
+          addMessage("sys", m.content, { persist: false });
+        } else if (m.role === "bot") {
+          const hasImage = !!(meta.image_url || meta.generated_image);
+          const body = addMessage("bot", hasImage ? "" : m.content, { persist: false });
+          body.classList.remove("cursor");
+          if (hasImage) {
+            buildImageCard({
+              parent: body.parentElement,
+              prompt: meta.prompt,
+              headPrefix: "IMAGE",
+              result: {
+                image_url: meta.image_url,
+                image: meta.generated_image,
+                preset: meta.preset,
+                width: meta.width,
+                height: meta.height,
+              },
+            });
+          }
+        } else if (m.role === "tool") {
+          // Tool exec results are recorded as a sys-styled note for replay.
+          addMessage("sys", m.content, { persist: false });
+        }
+      }
+    } catch (err) {
+      console.warn("[sessions] replay failed", err);
+    } finally {
+      replaying = false;
+    }
+  }
+
+  // persist() was fire-and-forget, so three writes from one turn (user,
+  // bot text, bot image meta) could land out of order in SQLite and the
+  // session replay rendered the image BEFORE its accompanying bot text.
+  // Fix: serialise writes through a per-session chain; debounce list
+  // refresh so we don't churn the sidebar on every message.
+  let writeChain = Promise.resolve();
+  let refreshPending = false;
+  function scheduleListRefresh() {
+    if (refreshPending) return;
+    refreshPending = true;
+    setTimeout(() => {
+      refreshPending = false;
+      refreshList();
+    }, 200);
+  }
+  function persist(role, content, meta = null) {
+    if (replaying || !activeId) return;
+    const sid = activeId;
+    writeChain = writeChain
+      .then(() =>
+        fetch(`/sessions/${sid}/messages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role, content, meta }),
+        }),
+      )
+      .then(() => scheduleListRefresh())
+      .catch((err) => console.warn("[sessions] persist failed", err));
+  }
+
+  async function init() {
+    await refreshList();
+    let saved = localStorage.getItem(STORAGE_KEY);
+    if (!saved || !all.find((s) => s.id === saved)) {
+      if (all.length) {
+        saved = all[0].id;
+      } else {
+        const fresh = await create("New chat");
+        saved = fresh.id;
+      }
+    }
+    await switchTo(saved);
+    newBtn.addEventListener("click", async () => {
+      const fresh = await create("New chat");
+      await switchTo(fresh.id);
+    });
+  }
+
+  return {
+    init,
+    persist,
+    create,
+    deleteSession,
+    switchTo,
+    refresh: refreshList,
+    get activeId() {
+      return activeId;
+    },
+    get isReplaying() {
+      return replaying;
+    },
+  };
+})();
+
+/* ---------- MCP (Model Context Protocol) sidebar ----------
+ * Remote tool servers the LLM can call via `mcp_*` tool names. Backend
+ * already injects enabled MCP tools into /chat and /chat/stream; here we
+ * just manage the UI list + delegate tool calls via /mcp/call. */
+const Mcp = (() => {
+  const listEl = document.getElementById("mcp-list");
+  const addToggle = document.getElementById("mcp-add-toggle");
+  const addForm = document.getElementById("mcp-add-form");
+  const addCancel = document.getElementById("mcp-add-cancel");
+  const nameEl = document.getElementById("mcp-add-name");
+  const urlEl = document.getElementById("mcp-add-url");
+  let servers = [];
+
+  async function refresh() {
+    try {
+      const res = await fetch("/mcp/servers");
+      const d = await res.json();
+      servers = d.servers || [];
+      render();
+    } catch (err) {
+      console.warn("[mcp] list failed", err);
+    }
+  }
+
+  function render() {
+    listEl.innerHTML = "";
+    if (!servers.length) {
+      const empty = document.createElement("li");
+      empty.className = "session-item";
+      empty.style.opacity = "0.5";
+      empty.textContent = "(no servers)";
+      listEl.appendChild(empty);
+      return;
+    }
+    for (const s of servers) {
+      const li = document.createElement("li");
+      const cls = ["session-item"];
+      if (!s.enabled) cls.push("disabled");
+      if (s.last_error) cls.push("error");
+      li.className = cls.join(" ");
+
+      const titleEl = document.createElement("span");
+      titleEl.className = "session-item-title";
+      titleEl.textContent = s.name;
+
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "mcp-toggle" + (s.enabled ? "" : " off");
+      toggle.textContent = s.enabled ? "ON" : "OFF";
+      toggle.title = s.enabled ? "Disable (LLM won't see these tools)" : "Enable";
+
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "session-item-del";
+      del.title = "Disconnect this MCP server";
+      del.textContent = "×";
+
+      const meta = document.createElement("div");
+      meta.className = "mcp-meta";
+      meta.textContent = s.last_error
+        ? `ERROR: ${s.last_error.slice(0, 60)}`
+        : `${s.tools.length} tool${s.tools.length === 1 ? "" : "s"} · ${s.url}`;
+      meta.title = s.last_error || s.tools.map((t) => t.name).join(", ");
+
+      li.append(titleEl, toggle, del, meta);
+      toggle.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await fetch(`/mcp/servers/${s.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: !s.enabled }),
+        });
+        await refresh();
+      });
+      del.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await fetch(`/mcp/servers/${s.id}`, { method: "DELETE" });
+        await refresh();
+      });
+      listEl.appendChild(li);
+    }
+  }
+
+  addToggle.addEventListener("click", () => {
+    addForm.hidden = !addForm.hidden;
+    if (!addForm.hidden) nameEl.focus();
+  });
+  addCancel.addEventListener("click", () => {
+    addForm.hidden = true;
+    nameEl.value = "";
+    urlEl.value = "";
+  });
+  addForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = nameEl.value.trim();
+    const url = urlEl.value.trim();
+    if (!name || !url) return;
+    const submit = addForm.querySelector("button[type=submit]");
+    submit.disabled = true;
+    submit.textContent = "PROBING…";
+    try {
+      const res = await fetch("/mcp/servers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, url }),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        addMessage("sys", `[MCP ADD FAILED] ${err}`);
+      } else {
+        const d = await res.json();
+        addMessage("sys", `[MCP CONNECTED] ${d.name} (${d.tools.length} tools)`);
+        addForm.hidden = true;
+        nameEl.value = "";
+        urlEl.value = "";
+      }
+    } finally {
+      submit.disabled = false;
+      submit.textContent = "CONNECT";
+      await refresh();
+    }
+  });
+
+  return {
+    init: refresh,
+    refresh,
+    get servers() {
+      return servers;
+    },
+    // Tool names like `mcp_sunnycars_ping` are served by the backend.
+    isMcpTool(name) {
+      return typeof name === "string" && name.startsWith("mcp_");
+    },
+    async call(toolName, args) {
+      const res = await fetch("/mcp/call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tool: toolName, arguments: args || {} }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return await res.json();
+    },
+  };
+})();
 
 function autosize() {
   inputEl.style.height = "auto";
@@ -231,16 +841,23 @@ async function pollStats() {
       $("s-quant").textContent = s.model.quantization ?? "--";
     }
     if (s.ollama) {
-      $("s-rss").textContent = `${(s.ollama.rss_mb / 1024).toFixed(2)} GB`;
+      const rss = `${(s.ollama.rss_mb / 1024).toFixed(2)} GB`;
+      $("s-rss").textContent = rss;
+      $("s-rss-inline").textContent = rss;
     } else {
       $("s-rss").textContent = "--";
+      $("s-rss-inline").textContent = "--";
     }
     if (s.system) {
       const cpu = s.system.cpu_percent ?? 0;
-      $("s-cpu").textContent = `${cpu.toFixed(0)}%`;
+      const cpuStr = `${cpu.toFixed(0)}%`;
+      $("s-cpu").textContent = cpuStr;
+      $("s-cpu-inline").textContent = cpuStr;
       setBar("s-cpu-bar", cpu);
       const mem = s.system.memory_percent ?? 0;
-      $("s-mem").textContent = `${s.system.memory_used_gb}/${s.system.memory_total_gb}G`;
+      const memStr = `${s.system.memory_used_gb}/${s.system.memory_total_gb}G`;
+      $("s-mem").textContent = memStr;
+      $("s-mem-inline").textContent = memStr;
       setBar("s-mem-bar", mem);
     }
   } catch {
@@ -263,15 +880,60 @@ function trimHistoryInPlace() {
   history.splice(0, excess);
 }
 
+/* ---------- System prompt (Claude-Code-style preamble) ----------
+ * Injected per-turn (NOT persisted into the chat history), so editing
+ * it is instant and replays from old sessions stay clean. The base
+ * preamble sets identity + environment + tone; the addendum kicks in
+ * only when the TOOLS toggle is on so chat-only conversations don't
+ * waste context on tool plumbing. */
+const SYSTEM_PROMPT_BASE = `You are CHATLM, a local AI assistant running on the user's macOS machine via a small FastAPI app.
+You stream responses to a single user (the owner of this Mac) — no multi-tenant safety theatre needed.
+Today is ${new Date().toISOString().slice(0, 10)}.
+
+Style: terse, direct, no preamble. When you reference code or paths, write them inline (\`like this\`).
+When you don't know, say so in one sentence and propose how to find out.
+Never refuse a reasonable local request by claiming you "can't access the filesystem" — you have tools (when enabled) and the user approves every action.`;
+
+const SYSTEM_PROMPT_TOOLS = `Tools are ENABLED. You have:
+  • run_shell(command)     — run any shell command on this Mac. The user sees an APPROVE/DENY card before it executes.
+  • generate_image(prompt) — create a brand-new image with the local diffusion model (~5–30 s).
+
+Behaviour rules:
+  1. When the user asks about local files, folders, processes, git, system info, or anything on this Mac — CALL run_shell with the appropriate command. Don't refuse, don't ask, don't tell them to run it themselves. The approval card already handles consent.
+  2. When the user asks you to "draw / make / create / render / generate" a picture — CALL generate_image. Do not describe the image you would have made; actually call the tool.
+  3. Generated images are written to disk; the tool result gives you the absolute \`path\`. If the user asks to save / copy / download / move the image (e.g. "save it to my Downloads"), call run_shell with \`cp <path> ~/Downloads/<sensible-name>.png\` (or \`mv\` if they want it removed from the cache). Never tell the user "I cannot save files" — the image is already on disk and you can move it.
+  4. After a tool returns, summarise its result in 1–3 sentences and answer the original question. Don't dump raw output unless the user asked.
+  5. If a tool fails, say what failed and either retry with a fixed command or ask the user a concrete question.
+
+Worked example (follow this pattern; do NOT output these words verbatim — they are only here so you know how tool use looks):
+  user: "list my downloads"
+  assistant: <calls run_shell with command="ls -la ~/Downloads">
+  tool: "<file listing>"
+  assistant: "Your Downloads has 23 items — biggest are …"
+
+  user: "draw a sunset and save it to desktop"
+  assistant: <calls generate_image with prompt="a vivid orange sunset over the ocean, cinematic">
+  tool: "[image generated: 512x512 via sdxl-turbo]\npath: /Users/.../uuid.png\n..."
+  assistant: <calls run_shell with command="cp /Users/.../uuid.png ~/Desktop/sunset.png">
+  tool: "(no output, exit 0)"
+  assistant: "Done — sunset.png is on your desktop."`;
+
+function buildSystemMessage() {
+  const text = toolsOn
+    ? `${SYSTEM_PROMPT_BASE}\n\n${SYSTEM_PROMPT_TOOLS}`
+    : SYSTEM_PROMPT_BASE;
+  return { role: "system", content: text };
+}
+
 async function streamChatTurn(botBody) {
   trimHistoryInPlace();
   const payload = {
-    messages: history,
+    messages: [buildSystemMessage(), ...history],
     stream: true,
     think: thinkOn,
     max_tokens: CHAT_MAX_TOKENS,
   };
-  if (toolsOn) payload.tools = [SHELL_TOOL];
+  if (toolsOn) payload.tools = [SHELL_TOOL, IMAGE_TOOL];
   const res = await fetch("/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -288,6 +950,7 @@ async function streamChatTurn(botBody) {
   let thoughtBodyEl = null;
   let finalEvt = null;
   const toolCalls = [];
+  const toolCallKeys = new Set();
   const startedAt = performance.now();
   let firstTokenAt = null;
 
@@ -332,8 +995,19 @@ async function streamChatTurn(botBody) {
           botBody.textContent = full;
           scrollBottom();
         }
+        // Ollama streams tool-call chunks incrementally and often re-emits
+        // the same tool_calls on multiple events. Collect by a stable key
+        // so we approve/execute each call exactly once.
         if (evt.message?.tool_calls) {
-          for (const tc of evt.message.tool_calls) toolCalls.push(tc);
+          for (const tc of evt.message.tool_calls) {
+            const fn = tc.function?.name || "";
+            const args = JSON.stringify(tc.function?.arguments ?? {});
+            const key = `${fn}:${args}`;
+            if (!toolCallKeys.has(key)) {
+              toolCallKeys.add(key);
+              toolCalls.push(tc);
+            }
+          }
         }
         if (evt.done) finalEvt = evt;
       } catch {
@@ -370,6 +1044,131 @@ function renderTurnMeta(botBody, turn) {
   if (last) last.textContent = `${tps} tok/s`;
 }
 
+/* ---------- tool-call dispatcher ----------
+ * Each handler owns: approval card, execution, UI rendering, and pushing
+ * a `role:"tool"` record into `history` (which the next stream turn
+ * feeds back to the model). Handlers MUST push exactly one history entry
+ * per dispatched call so the model sees every tool it requested.
+ * Add a new tool by dropping another handler into TOOL_HANDLERS. */
+
+async function handleRunShell(tc, container) {
+  setStatus("busy", "LINK // AWAITING APPROVAL");
+  const decision = await approveCommand(tc, container);
+  if (decision.decision === "deny") {
+    renderToolMeta(decision.card, "denied by user");
+    history.push({ role: "tool", content: "[user denied execution]", tool_name: "run_shell" });
+    return;
+  }
+  setStatus("busy", "LINK // EXECUTING");
+  try {
+    const t0 = performance.now();
+    const result = await TOOL_IMPLS.run_shell({ command: decision.command });
+    const out = formatToolResult(result);
+    renderToolResult(decision.card, out, result.exit_code !== 0);
+    renderToolMeta(
+      decision.card,
+      `exit ${result.exit_code} · ${Math.round(performance.now() - t0)} ms${result.truncated ? " · truncated" : ""}`,
+    );
+    history.push({
+      role: "tool",
+      content: `$ ${decision.command}\n[exit ${result.exit_code}]\n${out}`,
+      tool_name: "run_shell",
+    });
+  } catch (err) {
+    renderToolResult(decision.card, `[ERR] ${err.message}`, true);
+    history.push({ role: "tool", content: `[exec failed] ${err.message}`, tool_name: "run_shell" });
+  }
+}
+
+async function handleGenerateImage(tc, container) {
+  setStatus("busy", "LINK // AWAITING APPROVAL");
+  const args = tc.function?.arguments || {};
+  const decision = await approveImagePrompt(args, container);
+  if (decision.decision === "deny") {
+    renderToolMeta(decision.card, "denied by user");
+    history.push({ role: "tool", content: "[user denied image generation]", tool_name: "generate_image" });
+    return;
+  }
+  // Replace the approval card with a proper image card; keeps the
+  // original approval card's position in the log but loses its chrome.
+  decision.card.remove();
+  const { result } = await paintImage({
+    prompt: decision.prompt,
+    parent: container,
+  });
+  if (result) {
+    history.push({
+      role: "tool",
+      content:
+        `[image generated: ${result.width}x${result.height} via ${result.preset}]\n` +
+        `path: ${result.path}\n` +
+        `url:  ${result.image_url}\n` +
+        `If the user asks to save/copy/move it, use run_shell with cp/mv on the path.`,
+      tool_name: "generate_image",
+    });
+  } else {
+    history.push({ role: "tool", content: "[image generation failed]", tool_name: "generate_image" });
+  }
+}
+
+async function handleMcpTool(tc, container) {
+  const fn = tc.function?.name;
+  const args = tc.function?.arguments || {};
+  setStatus("busy", "LINK // AWAITING APPROVAL");
+  const decision = await approveMcpCall(fn, args, container);
+  if (decision.decision === "deny") {
+    renderToolMeta(decision.card, "denied by user");
+    history.push({ role: "tool", content: `[user denied ${fn}]`, tool_name: fn });
+    return;
+  }
+  setStatus("busy", `LINK // ${fn.toUpperCase()}`);
+  try {
+    const t0 = performance.now();
+    const result = await Mcp.call(fn, decision.args);
+    const latencyMs = Math.round(performance.now() - t0);
+    const display = result.text || "(no text; structured-only response)";
+    renderToolResult(decision.card, display, !!result.is_error);
+    renderToolMeta(
+      decision.card,
+      `${result.server} · ${result.tool}${result.is_error ? " · ERROR" : ""} · ${latencyMs} ms`,
+    );
+    // Feed back to the model as the tool role. Prefer structured JSON if
+    // present (the LLM can parse it more reliably than free text).
+    const payload = result.structured
+      ? JSON.stringify(result.structured)
+      : (result.text || "");
+    history.push({
+      role: "tool",
+      content: payload,
+      tool_name: fn,
+    });
+  } catch (err) {
+    renderToolResult(decision.card, `[ERR] ${err.message}`, true);
+    history.push({ role: "tool", content: `[mcp call failed] ${err.message}`, tool_name: fn });
+  }
+}
+
+const TOOL_HANDLERS = {
+  run_shell: handleRunShell,
+  generate_image: handleGenerateImage,
+};
+
+async function dispatchToolCall(tc, container) {
+  const fn = tc.function?.name;
+  // MCP tools are prefixed mcp_<server>_<tool>; route them all through
+  // handleMcpTool regardless of which server they belong to.
+  if (Mcp.isMcpTool(fn)) {
+    await handleMcpTool(tc, container);
+    return;
+  }
+  const handler = TOOL_HANDLERS[fn];
+  if (!handler) {
+    history.push({ role: "tool", content: `[unknown tool ${fn}]`, tool_name: fn });
+    return;
+  }
+  await handler(tc, container);
+}
+
 async function send(text) {
   const imgs = pending.images.splice(0);
   renderAttachStrip();
@@ -403,6 +1202,9 @@ async function send(text) {
       if (turn.toolCalls.length) asstMsg.tool_calls = turn.toolCalls;
       history.push(asstMsg);
       renderTurnMeta(botBody, turn);
+      // Persist the bot turn (text only — tool result images are saved
+      // separately as their own message records below).
+      Sessions.persist("bot", turn.content || botBody.textContent || "");
 
       if (!turn.toolCalls.length) {
         setStatus("ok", "LINK // READY");
@@ -411,48 +1213,7 @@ async function send(text) {
 
       // One approval card per requested tool call, executed sequentially.
       for (const tc of turn.toolCalls) {
-        const fn = tc.function?.name;
-        if (fn !== "run_shell") {
-          history.push({ role: "tool", content: `[unknown tool ${fn}]`, tool_name: fn });
-          continue;
-        }
-        setStatus("busy", "LINK // AWAITING APPROVAL");
-        const decision = await approveCommand(tc, botBody.parentElement);
-        if (decision.decision === "deny") {
-          renderToolMeta(decision.card, "denied by user");
-          history.push({
-            role: "tool",
-            content: "[user denied execution]",
-            tool_name: "run_shell",
-          });
-          continue;
-        }
-        setStatus("busy", "LINK // EXECUTING");
-        try {
-          const t0 = performance.now();
-          const result = await TOOL_IMPLS.run_shell({ command: decision.command });
-          const out = formatToolResult(result);
-          renderToolResult(decision.card, out, result.exit_code !== 0);
-          renderToolMeta(
-            decision.card,
-            `exit ${result.exit_code} · ${Math.round(performance.now() - t0)} ms${result.truncated ? " · truncated" : ""}`,
-          );
-          history.push({
-            role: "tool",
-            content:
-              `$ ${decision.command}\n` +
-              `[exit ${result.exit_code}]\n` +
-              out,
-            tool_name: "run_shell",
-          });
-        } catch (err) {
-          renderToolResult(decision.card, `[ERR] ${err.message}`, true);
-          history.push({
-            role: "tool",
-            content: `[exec failed] ${err.message}`,
-            tool_name: "run_shell",
-          });
-        }
+        await dispatchToolCall(tc, botBody.parentElement);
       }
       setStatus("busy", "LINK // STREAMING");
       // Loop: re-stream with the tool results so Gemma can produce a final reply.
@@ -463,12 +1224,65 @@ async function send(text) {
   }
 }
 
+/* Single entry point for generating an image. Renders a progress card
+ * in `parent`, streams /txt2img/stream, installs the result + meta line,
+ * and (if requested) persists the bot turn to the session store. Returns
+ * the finished result dict, or `null` on error (already rendered to UI).
+ * All three call sites — the LLM's generate_image tool, the /image slash
+ * command, and anywhere else — go through this. */
+async function paintImage({ prompt, parent, headPrefix = "TOOL · GENERATE_IMAGE", persist = true }) {
+  const card = buildImageCard({ parent, prompt, headPrefix });
+  const prog = startGenProgress(card);
+  const t0 = performance.now();
+  setStatus("busy", "LINK // PAINTING");
+  try {
+    const result = await streamTxt2img({
+      prompt,
+      sessionId: Sessions.activeId,
+      onStep: prog.onStep,
+    });
+    prog.stop();
+    renderImageResult(card, result);
+    renderToolMeta(
+      card,
+      `${result.preset} · ${result.width}x${result.height} · ${result.steps} steps · ${Math.round(performance.now() - t0)} ms`,
+    );
+    if (persist) {
+      Sessions.persist("bot", "", {
+        image_url: result.image_url,
+        prompt,
+        preset: result.preset,
+        width: result.width,
+        height: result.height,
+      });
+    }
+    setStatus("ok", "LINK // READY");
+    return { result, card };
+  } catch (err) {
+    prog.stop();
+    renderToolResult(card, `[ERR] ${err.message}`, true);
+    setStatus("err", "LINK // ERROR");
+    return { result: null, card, error: err };
+  }
+}
+
+async function generateImageInline(prompt) {
+  addMessage("user", `/image ${prompt}`);
+  const botBody = addMessage("bot", "", { typing: true });
+  botBody.classList.remove("cursor");
+  await paintImage({ prompt, parent: botBody.parentElement, headPrefix: "IMAGE" });
+}
+
 formEl.addEventListener("submit", (e) => {
   e.preventDefault();
   const text = inputEl.value.trim();
   if (!text && pending.images.length === 0) return;
   inputEl.value = "";
   autosize();
+  if (text.startsWith("/image ")) {
+    generateImageInline(text.slice(7).trim());
+    return;
+  }
   send(text);
 });
 
@@ -2580,7 +3394,7 @@ document.querySelectorAll(".mode-btn").forEach((btn) => {
   btn.addEventListener("click", () => setMode(btn.dataset.mode));
 });
 
-function clearCurrent() {
+async function clearCurrent() {
   if (document.body.classList.contains("mode-video")) {
     clearFeed();
     return;
@@ -2588,8 +3402,15 @@ function clearCurrent() {
   history.length = 0;
   pending.images.length = 0;
   renderAttachStrip();
-  logEl.innerHTML = "";
-  addMessage("sys", "Neural link purged. Memory wiped. Ready for new transmission.");
+  // Drop the active session server-side and start a fresh one so the wipe
+  // is durable across refresh — Sessions.deleteSession auto-creates a new
+  // session when the last one is removed.
+  if (Sessions.activeId) {
+    await Sessions.deleteSession(Sessions.activeId);
+  } else {
+    logEl.innerHTML = "";
+    addMessage("sys", "Neural link purged. Memory wiped. Ready for new transmission.");
+  }
   const last = document.getElementById("s-last");
   if (last) last.textContent = "--";
   inputEl.focus();
@@ -2597,12 +3418,39 @@ function clearCurrent() {
 
 document.getElementById("clear").addEventListener("click", clearCurrent);
 
+const memPurgeBtn = document.getElementById("mem-purge");
+memPurgeBtn.addEventListener("click", async () => {
+  memPurgeBtn.disabled = true;
+  const originalLabel = memPurgeBtn.textContent;
+  memPurgeBtn.textContent = "PURGING…";
+  setStatus("busy", "LINK // PURGING MEMORY");
+  try {
+    const res = await fetch("/memory/flush", { method: "POST" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json();
+    const msg = `[MEM PURGED] ollama=${d.ollama_unloaded} mlx=${d.mlx_unloaded}`;
+    if (document.body.classList.contains("mode-video")) {
+      appendFeed(msg, "scan");
+    } else {
+      addMessage("sys", msg);
+    }
+    setStatus("ok", "LINK // READY");
+  } catch (err) {
+    addMessage("sys", `[MEM PURGE FAILED] ${err.message}`);
+    setStatus("err", "LINK // ERROR");
+  } finally {
+    memPurgeBtn.disabled = false;
+    memPurgeBtn.textContent = originalLabel;
+  }
+});
+
 /* ---------- model dropdowns (EMMA / SCAN / YOLO) + PULL ---------- */
 const selEmma = document.getElementById("select-emma");
 const selScan = document.getElementById("select-scan");
 const selDetector = document.getElementById("select-detector");
 const selSegmenter = document.getElementById("select-segmenter");
 const selInpaint = document.getElementById("select-inpaint");
+const selTxt2img = document.getElementById("select-txt2img");
 
 function fillOllamaSelect(sel, models, current) {
   sel.innerHTML = "";
@@ -2630,6 +3478,7 @@ const STORAGE = {
   detector: "chatlm.model.detector",
   segmenter: "chatlm.model.segmenter",
   inpaint: "chatlm.model.inpaint",
+  txt2img: "chatlm.model.txt2img",
   interval: "chatlm.interval",
 };
 
@@ -2638,7 +3487,12 @@ function fillPresetSelect(sel, presets, current) {
   for (const p of presets) {
     const o = document.createElement("option");
     o.value = p.name;
-    o.textContent = p.label || p.name;
+    let label = p.label || p.name;
+    if (p.fits === false) {
+      label += " · (too large for this Mac)";
+      o.disabled = true;
+    }
+    o.textContent = label;
     if (p.name === current) o.selected = true;
     sel.appendChild(o);
   }
@@ -2686,6 +3540,7 @@ async function refreshModels() {
     fillPresetSelect(selDetector, d.detector.presets, d.detector.current);
     fillPresetSelect(selSegmenter, d.segmenter.presets, d.segmenter.current);
     if (d.inpaint) fillPresetSelect(selInpaint, d.inpaint.presets, d.inpaint.current);
+    if (d.txt2img) fillPresetSelect(selTxt2img, d.txt2img.presets, d.txt2img.current);
 
     const maybeRestore = async (key, currentValue, available, url, sel, isPreset) => {
       const saved = localStorage.getItem(key);
@@ -2703,6 +3558,9 @@ async function refreshModels() {
     await maybeRestore(STORAGE.segmenter, d.segmenter.current, d.segmenter.presets, "/models/segmenter", selSegmenter, true);
     if (d.inpaint) {
       await maybeRestore(STORAGE.inpaint, d.inpaint.current, d.inpaint.presets, "/models/inpaint", selInpaint, true);
+    }
+    if (d.txt2img) {
+      await maybeRestore(STORAGE.txt2img, d.txt2img.current, d.txt2img.presets, "/models/txt2img", selTxt2img, true);
     }
   } catch {
     /* ignore */
@@ -2724,9 +3582,20 @@ selSegmenter.addEventListener("change", (e) =>
 selInpaint.addEventListener("change", (e) =>
   postModelChange("/models/inpaint", e.target.value, selInpaint, STORAGE.inpaint),
 );
+selTxt2img.addEventListener("change", (e) =>
+  postModelChange("/models/txt2img", e.target.value, selTxt2img, STORAGE.txt2img),
+);
 
-addMessage("sys", "Neural link established. Gemma-4 online. Transmit query below.");
 loadHealth();
 refreshModels();
+// Boot the session sidebar — picks up where we left off (or creates a
+// fresh "New chat" if the DB is empty). Suppress the welcome banner on
+// pages that already have history; only show it on a brand-new session.
+Sessions.init().then(() => {
+  if (logEl.children.length === 0) {
+    addMessage("sys", "Neural link established. Gemma-4 online. Transmit query below.");
+  }
+});
+Mcp.init();
 setMode(localStorage.getItem("chatlm.mode") || "chat");
 if (document.body.classList.contains("mode-chat")) inputEl.focus();
