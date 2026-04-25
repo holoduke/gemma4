@@ -166,6 +166,35 @@ def list_messages(sid: str) -> list[dict]:
     return out
 
 
+def update_message(sid: str, mid: int, content: str, meta: dict[str, Any] | None = None) -> dict | None:
+    """Replace content + meta of an existing row. Used to swap an
+    in-progress placeholder for the final streamed response so that a
+    page-refresh mid-stream lands on a complete record. Returns the
+    updated row, or None if the id doesn't belong to this session."""
+    conn = _connect()
+    meta_json = json.dumps(meta) if meta else None
+    now = _now()
+    with _lock:
+        cur = conn.execute(
+            "UPDATE messages SET content = ?, meta = ? WHERE id = ? AND session_id = ?",
+            (content, meta_json, mid, sid),
+        )
+        if cur.rowcount == 0:
+            return None
+        conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (now, sid))
+        row = conn.execute(
+            "SELECT id, role, content, meta, created_at FROM messages WHERE id = ?",
+            (mid,),
+        ).fetchone()
+    out = dict(row)
+    if out["meta"]:
+        try:
+            out["meta"] = json.loads(out["meta"])
+        except json.JSONDecodeError:
+            out["meta"] = None
+    return out
+
+
 def append_message(sid: str, role: str, content: str, meta: dict[str, Any] | None = None) -> dict:
     if not get_session(sid):
         raise KeyError(f"session not found: {sid}")

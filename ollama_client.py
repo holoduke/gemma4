@@ -72,7 +72,12 @@ class OllamaClient:
         if tools:
             payload["tools"] = tools
         async with self._client.stream("POST", "/api/chat", json=payload) as response:
-            _raise_for_status(response)
+            if response.is_error:
+                # Streaming responses don't have .text populated until you
+                # explicitly read the body; doing it inline gives a real
+                # error message instead of `httpx.ResponseNotRead`.
+                body = (await response.aread()).decode("utf-8", errors="replace")
+                raise OllamaError(f"Ollama {response.status_code}: {body[:500]}")
             async for line in response.aiter_lines():
                 if line:
                     yield line

@@ -67,6 +67,36 @@ MLX_MODELS: dict[str, dict] = {
         "quantization": "q4-ud",
         "size_gb": 15.0,
     },
+    # Qwen3.5 — too new for llama.cpp / Ollama (custom `qwen35` arch token).
+    # MLX has its own arch dispatch and supports it via mlx-community.
+    "mlx:qwen3.5-4b-4bit": {
+        "repo": "mlx-community/Qwen3.5-4B-MLX-4bit",
+        "label": "MLX · Qwen 3.5 4B 4bit",
+        "parameter_size": "4.2B",
+        "quantization": "q4",
+        "size_gb": 2.5,
+    },
+    "mlx:qwen3.5-9b-4bit": {
+        "repo": "mlx-community/Qwen3.5-9B-MLX-4bit",
+        "label": "MLX · Qwen 3.5 9B 4bit",
+        "parameter_size": "8.95B",
+        "quantization": "q4",
+        "size_gb": 5.5,
+    },
+    "mlx:qwen3.5-9b-8bit": {
+        "repo": "mlx-community/Qwen3.5-9B-MLX-8bit",
+        "label": "MLX · Qwen 3.5 9B 8bit",
+        "parameter_size": "8.95B",
+        "quantization": "q8",
+        "size_gb": 9.5,
+    },
+    "mlx:qwen3.5-27b-4bit": {
+        "repo": "mlx-community/Qwen3.5-27B-4bit",
+        "label": "MLX · Qwen 3.5 27B 4bit",
+        "parameter_size": "27B",
+        "quantization": "q4",
+        "size_gb": 15.5,
+    },
 }
 
 

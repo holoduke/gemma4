@@ -92,6 +92,28 @@ html.theme-matrix {
   --noise-alpha: 0.06;
 }
 
+/* ---- Theme: CLASSIC ----
+ * Plain chat app vibe — system fonts, GitHub-ish colors, no neon,
+ * no polygonal button clips, no scanlines. For users who want the
+ * tool to look like a regular chat client rather than a terminal. */
+html.theme-classic {
+  --bg: #ffffff;
+  --bg-grid: #ffffff;
+  --panel: #ffffff;
+  --panel-edge: #d0d7de;
+  --cyan: #0969da;
+  --magenta: #8250df;
+  --amber: #9a6700;
+  --green: #1a7f37;
+  --text: #1f2328;
+  --text-dim: #656d76;
+  --danger: #cf222e;
+  --glow-a: transparent;
+  --glow-b: transparent;
+  --scanline-alpha: 0;
+  --noise-alpha: 0;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -544,6 +566,83 @@ body.mode-video .bar-mini { width: 24px; }
   border-left: 2px solid var(--green);
 }
 .tool-call-result.err { border-left-color: var(--danger); }
+
+/* Markdown-rendered tool result (MCP servers return rich markdown).
+   Uses the same typography as chat bubbles so tables/lists/links look
+   first-class instead of monospace-flattened. */
+.tool-call-result-md {
+  font-family: inherit;
+  background: rgba(255, 43, 214, 0.04);
+  border-left: 2px solid var(--magenta);
+  white-space: normal;
+  font-size: 13px;
+  padding: 10px 12px;
+  max-height: none;
+  line-height: 1.55;
+}
+.tool-call-result-md p { margin: 0 0 4px; }
+.tool-call-result-md p:last-child { margin-bottom: 0; }
+.tool-call-result-md p:empty { display: none; }
+.tool-call-result-md h1, .tool-call-result-md h2, .tool-call-result-md h3 {
+  margin: 10px 0 6px;
+  font-family: "Orbitron", sans-serif;
+  letter-spacing: 1px;
+  color: var(--cyan);
+}
+.tool-call-result-md h1 { font-size: 15px; }
+.tool-call-result-md h2 { font-size: 13px; }
+.tool-call-result-md h3 { font-size: 12px; }
+.tool-call-result-md ul, .tool-call-result-md ol { margin: 4px 0 10px; padding-left: 22px; }
+.tool-call-result-md li { margin-bottom: 2px; }
+.tool-call-result-md strong { color: var(--magenta); font-weight: 600; }
+.tool-call-result-md em { color: var(--cyan); font-style: italic; }
+.tool-call-result-md code {
+  font-family: "Share Tech Mono", ui-monospace, monospace;
+  font-size: 12px;
+  background: rgba(128, 128, 128, 0.12);
+  border: 1px solid var(--panel-edge);
+  padding: 1px 5px;
+  border-radius: 2px;
+  color: var(--cyan);
+}
+.tool-call-result-md a {
+  color: var(--cyan);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  word-break: break-all;       /* long booking URLs */
+}
+.tool-call-result-md a:hover { text-decoration-style: solid; }
+.tool-call-result-md hr { border: 0; border-top: 1px dashed var(--panel-edge); margin: 10px 0; }
+.tool-call-result-md blockquote {
+  margin: 6px 0;
+  padding: 2px 10px;
+  border-left: 2px solid var(--amber);
+  color: var(--text-dim);
+  font-style: italic;
+}
+.tool-call-result-md table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 12px;
+  width: 100%;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+.tool-call-result-md th, .tool-call-result-md td {
+  border: 1px solid var(--panel-edge);
+  padding: 5px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.tool-call-result-md th {
+  background: rgba(255, 43, 214, 0.08);
+  color: var(--magenta);
+  font-family: "Orbitron", sans-serif;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+.tool-call-result-md tr:nth-child(even) td { background: rgba(128, 128, 128, 0.04); }
 .tool-call-meta {
   color: var(--text-dim);
   font-size: 10px;
@@ -569,7 +668,10 @@ body.mode-video .bar-mini { width: 24px; }
   content: "▾ ";
 }
 .thought .thought-body {
-  white-space: pre-wrap;
+  /* Reasoning is rendered through marked, so <p> / <br> do the visual
+     breaks — `pre-wrap` here would surface the literal \n between tags
+     as enormous blank lines (same bug as the bot body had). */
+  white-space: normal;
   word-wrap: break-word;
   line-height: 1.5;
   padding: 6px 2px 2px;
@@ -686,6 +788,136 @@ body.mode-video .bar-mini { width: 24px; }
   color: var(--text);
   border-left: 2px solid var(--magenta);
   padding-left: 10px;
+}
+
+/* ---------- markdown rendering (bot + thinking) ----------
+ * Scoped to .body and .thought-body so user/sys bubbles stay plain. */
+/* Bot bodies render HTML from marked; the default `pre-wrap` on
+   `.msg .body` would turn the literal newlines between <p> tags into
+   visible blank lines, so fall back to normal whitespace handling. */
+.msg.bot .body,
+.thought-body { white-space: normal; }
+.msg.bot .body p,
+.thought-body p { margin: 0 0 4px; }
+.msg.bot .body p:last-child,
+.thought-body p:last-child { margin-bottom: 0; }
+/* Collapse runs of empty paragraphs that some models emit (double
+   blank lines). Hides paragraphs whose only content is whitespace. */
+.msg.bot .body p:empty,
+.thought-body p:empty { display: none; }
+
+.msg.bot .body h1, .msg.bot .body h2, .msg.bot .body h3,
+.msg.bot .body h4, .msg.bot .body h5, .msg.bot .body h6,
+.thought-body h1, .thought-body h2, .thought-body h3 {
+  margin: 10px 0 6px;
+  font-family: "Orbitron", sans-serif;
+  letter-spacing: 1px;
+  color: var(--cyan);
+}
+.msg.bot .body h1, .thought-body h1 { font-size: 16px; }
+.msg.bot .body h2, .thought-body h2 { font-size: 14px; }
+.msg.bot .body h3, .thought-body h3 { font-size: 13px; }
+
+.msg.bot .body ul, .msg.bot .body ol,
+.thought-body ul, .thought-body ol {
+  margin: 4px 0 10px;
+  padding-left: 22px;
+}
+.msg.bot .body li, .thought-body li { margin-bottom: 2px; }
+
+.msg.bot .body strong,
+.thought-body strong { color: var(--magenta); font-weight: 600; }
+
+.msg.bot .body em,
+.thought-body em { color: var(--cyan); font-style: italic; }
+
+.msg.bot .body code,
+.thought-body code {
+  font-family: "Share Tech Mono", ui-monospace, monospace;
+  font-size: 12px;
+  background: rgba(128, 128, 128, 0.12);
+  border: 1px solid var(--panel-edge);
+  padding: 1px 5px;
+  border-radius: 2px;
+  color: var(--cyan);
+}
+
+.msg.bot .body pre,
+.thought-body pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--panel-edge);
+  border-left: 2px solid var(--cyan);
+  font-family: "Share Tech Mono", ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+}
+.msg.bot .body pre code,
+.thought-body pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+  color: var(--text);
+}
+
+.msg.bot .body blockquote,
+.thought-body blockquote {
+  margin: 6px 0;
+  padding: 2px 10px;
+  border-left: 2px solid var(--amber);
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.msg.bot .body a,
+.thought-body a {
+  color: var(--cyan);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+.msg.bot .body a:hover { text-decoration-style: solid; }
+
+.msg.bot .body hr,
+.thought-body hr {
+  border: 0;
+  border-top: 1px dashed var(--panel-edge);
+  margin: 10px 0;
+}
+
+/* Tables — the main reason we're adding markdown support. */
+.msg.bot .body table,
+.thought-body table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 12px;
+  width: 100%;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+.msg.bot .body th, .msg.bot .body td,
+.thought-body th, .thought-body td {
+  border: 1px solid var(--panel-edge);
+  padding: 5px 10px;
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+}
+.msg.bot .body th,
+.thought-body th {
+  background: rgba(255, 43, 214, 0.08);
+  color: var(--magenta);
+  font-family: "Orbitron", sans-serif;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+.msg.bot .body tr:nth-child(even) td,
+.thought-body tr:nth-child(even) td {
+  background: rgba(128, 128, 128, 0.04);
 }
 .msg.sys .body {
   color: var(--amber);
@@ -1250,7 +1482,7 @@ body.track-armed .track-props { display: flex; }
   overflow-y: auto;
   font-size: 13px;
   line-height: 1.55;
-  color: #d9ecff;
+  color: var(--text);
   padding: 4px 0;
   display: flex;
   flex-direction: column;
@@ -1504,25 +1736,66 @@ body.track-armed .track-props { display: flex; }
 
 /* ---------- MCP section (below sessions) ---------- */
 .mcp-head { margin-top: 4px; border-top: 1px dashed var(--panel-edge); padding-top: 10px; }
+
+/* Add-server modal (<dialog>). Themed like the chat bubble panels so
+   the popup fits the cyberpunk aesthetic on all themes. */
+.mcp-dialog {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--cyan);
+  box-shadow: 0 0 20px rgba(0, 240, 255, 0.25);
+  padding: 0;
+  min-width: 360px;
+  max-width: 90vw;
+}
+.mcp-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+}
+.mcp-dialog-head {
+  font-family: "Orbitron", sans-serif;
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  color: var(--cyan);
+  border-bottom: 1px solid var(--panel-edge);
+  padding: 10px 14px;
+}
 .mcp-add-form {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 4px 0;
+  gap: 10px;
+  padding: 14px;
+  min-width: 360px;
+}
+.mcp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.mcp-field > span {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: var(--magenta);
 }
 .mcp-add-form input {
   background: transparent;
   border: 1px solid var(--panel-edge);
   color: var(--text);
-  padding: 4px 6px;
+  padding: 6px 8px;
   font-family: "Share Tech Mono", ui-monospace, monospace;
-  font-size: 11px;
+  font-size: 12px;
 }
 .mcp-add-form input:focus {
   outline: none;
   border-color: var(--cyan);
+  box-shadow: 0 0 4px rgba(0, 240, 255, 0.3);
 }
-.mcp-add-actions { display: flex; gap: 4px; }
+.mcp-add-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
 .mcp-cancel { border-color: var(--panel-edge); color: var(--text-dim); }
 .mcp-list .session-item {
   align-items: flex-start;
@@ -1580,3 +1853,145 @@ body.tools-on .auto-approve { display: inline-flex; }
 }
 .mem-purge:hover { background: rgba(255, 176, 0, 0.12); }
 .mem-purge:disabled { opacity: 0.5; cursor: progress; }
+
+/* ==========================================================================
+   theme-classic overrides
+   Each rule below rolls back a piece of cyberpunk decoration: custom fonts,
+   letter-spacing, text-shadow glows, polygonal button clips, scanlines.
+   Grouped by concern so it's obvious what a rule is undoing.
+   ========================================================================== */
+
+/* --- fonts --------------------------------------------------------------- */
+html.theme-classic,
+html.theme-classic body,
+html.theme-classic button,
+html.theme-classic input,
+html.theme-classic select,
+html.theme-classic textarea {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+}
+html.theme-classic .logo,
+html.theme-classic .logo-text,
+html.theme-classic .logo-bracket,
+html.theme-classic .status,
+html.theme-classic .status-text,
+html.theme-classic .model,
+html.theme-classic .meta,
+html.theme-classic .sessions-title,
+html.theme-classic .session-new,
+html.theme-classic .session-item-title,
+html.theme-classic .session-item-count,
+html.theme-classic .mcp-toggle,
+html.theme-classic .mcp-meta,
+html.theme-classic .mcp-dialog-head,
+html.theme-classic .mcp-field > span,
+html.theme-classic .bar-stat,
+html.theme-classic .bar-stat .k,
+html.theme-classic .auto-approve,
+html.theme-classic .mem-purge,
+html.theme-classic .theme-btn,
+html.theme-classic .toggle,
+html.theme-classic .clear,
+html.theme-classic .mode-btn,
+html.theme-classic .model-select,
+html.theme-classic .model-select span,
+html.theme-classic .tool-call-head,
+html.theme-classic .tool-call-meta,
+html.theme-classic .msg .who,
+html.theme-classic .msg.bot .body h1,
+html.theme-classic .msg.bot .body h2,
+html.theme-classic .msg.bot .body h3,
+html.theme-classic .thought-body h1,
+html.theme-classic .thought-body h2,
+html.theme-classic .thought-body h3,
+html.theme-classic .msg.bot .body th,
+html.theme-classic .thought-body th,
+html.theme-classic .tool-call-result-md th {
+  font-family: inherit;
+  letter-spacing: 0;
+}
+/* Code/pre keep monospace — flips to the system mono stack though. */
+html.theme-classic code,
+html.theme-classic pre,
+html.theme-classic .msg.bot .body code,
+html.theme-classic .thought-body code,
+html.theme-classic .model-select select,
+html.theme-classic .tool-call-cmd,
+html.theme-classic .tool-call-result {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* --- glows / shadows ---------------------------------------------------- */
+html.theme-classic .logo-text,
+html.theme-classic .logo-bracket,
+html.theme-classic .status,
+html.theme-classic .status-text,
+html.theme-classic .msg.user .who,
+html.theme-classic .msg.bot .who,
+html.theme-classic .msg.sys .who,
+html.theme-classic .model,
+html.theme-classic .thought summary,
+html.theme-classic .model-select span,
+html.theme-classic .auto-approve,
+html.theme-classic .auto-approve.armed {
+  text-shadow: none;
+}
+html.theme-classic .theme-btn:hover,
+html.theme-classic .approve-btn,
+html.theme-classic .deny-btn {
+  box-shadow: none;
+}
+
+/* --- polygonal clip-paths → rounded rectangles --------------------------- */
+html.theme-classic .model-select select,
+html.theme-classic .input,
+html.theme-classic .session-new,
+html.theme-classic .mem-purge,
+html.theme-classic .mcp-toggle,
+html.theme-classic .mode-btn,
+html.theme-classic .toggle,
+html.theme-classic .clear,
+html.theme-classic .theme-btn,
+html.theme-classic .send,
+html.theme-classic .attach,
+html.theme-classic .mic,
+html.theme-classic .clone,
+html.theme-classic .mini-btn,
+html.theme-classic .approve-btn,
+html.theme-classic .deny-btn,
+html.theme-classic .speak-btn {
+  clip-path: none;
+  border-radius: 6px;
+}
+
+/* --- panel chrome -------------------------------------------------------- */
+html.theme-classic .scanlines,
+html.theme-classic .noise,
+html.theme-classic .vignette { display: none; }
+html.theme-classic body {
+  background: var(--bg);
+  color: var(--text);
+}
+html.theme-classic .sessions-pane,
+html.theme-classic .stats,
+html.theme-classic .bar,
+html.theme-classic .log,
+html.theme-classic .composer {
+  background: var(--panel);
+}
+
+/* --- reading surfaces --------------------------------------------------- */
+html.theme-classic .msg .body,
+html.theme-classic .thought-body,
+html.theme-classic .meta,
+html.theme-classic .feed-line {
+  letter-spacing: 0;
+  font-size: 14px;
+}
+html.theme-classic .msg.bot .body h1 { font-size: 18px; font-weight: 600; color: var(--text); }
+html.theme-classic .msg.bot .body h2 { font-size: 16px; font-weight: 600; color: var(--text); }
+html.theme-classic .msg.bot .body h3 { font-size: 15px; font-weight: 600; color: var(--text); }
+html.theme-classic .msg.bot .body strong { color: var(--text); }
+html.theme-classic .msg.bot .body em    { color: var(--text); font-style: italic; }
+html.theme-classic .msg.bot .body th { background: #f6f8fa; color: var(--text); }

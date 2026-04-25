@@ -66,6 +66,7 @@ from schemas import (
     AppendMessageRequest,
     CreateSessionRequest,
     RenameSessionRequest,
+    UpdateMessageRequest,
     AddMcpServerRequest,
     UpdateMcpServerRequest,
     McpCallRequest,
@@ -144,7 +145,18 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="chatlm", version="0.1.0", lifespan=lifespan)
 
 STATIC_DIR = Path(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+class _NoCacheStatic(StaticFiles):
+    """Tiny subclass that slaps Cache-Control: no-store on every static
+    response. Aggressive browser caching of ES modules during dev makes
+    code changes invisible without Cmd+Shift+R — this keeps iteration
+    tight. Safe because the whole app is localhost-only."""
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
+app.mount("/static", _NoCacheStatic(directory=STATIC_DIR), name="static")
 
 # Persistent on-disk storage for generated images. Layout:
 #   storage/images/<session_id>/<uuid>.png   — per-session
@@ -761,6 +773,16 @@ async def append_session_message(sid: str, req: AppendMessageRequest) -> dict:
         return sessions_mod.append_message(sid, req.role, req.content, req.meta)
     except KeyError as err:
         raise HTTPException(status_code=404, detail=str(err)) from err
+
+
+@app.patch("/sessions/{sid}/messages/{mid}")
+async def update_session_message(sid: str, mid: int, req: UpdateMessageRequest) -> dict:
+    """Replace an existing row's content + meta. Used by the chat client
+    to swap an in-progress placeholder for the final streamed text."""
+    out = sessions_mod.update_message(sid, mid, req.content, req.meta)
+    if out is None:
+        raise HTTPException(status_code=404, detail=f"message {mid} not in session {sid}")
+    return out
 
 
 @app.patch("/sessions/{sid}")

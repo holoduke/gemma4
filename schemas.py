@@ -309,6 +309,11 @@ class AppendMessageRequest(BaseModel):
     meta: dict | None = None
 
 
+class UpdateMessageRequest(BaseModel):
+    content: str = Field("", max_length=2_000_000)
+    meta: dict | None = None
+
+
 class AddMcpServerRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=60)
     url: str = Field(..., min_length=1, max_length=500)
