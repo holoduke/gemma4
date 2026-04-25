@@ -264,6 +264,71 @@ class GenerateResponse(BaseModel):
     response: str
 
 
+class Txt2ImgRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=1500)
+    negative_prompt: str | None = Field(None, max_length=800)
+    preset: str | None = Field(None, max_length=80)
+    steps: int | None = Field(None, ge=1, le=60)
+    guidance: float | None = Field(None, ge=0.0, le=20.0)
+    width: int | None = Field(None, ge=256, le=2048)
+    height: int | None = Field(None, ge=256, le=2048)
+    seed: int | None = Field(None, ge=0, le=2**31 - 1)
+    session_id: str | None = Field(None, max_length=64, description="Session id; image is filed under storage/images/<sid>/")
+
+
+class Txt2ImgResponse(BaseModel):
+    image_url: str
+    path: str = Field(..., description="Absolute filesystem path so the model can cp/mv via run_shell")
+    width: int
+    height: int
+    preset: str
+    steps: int
+    latency_ms: int
+
+
+class CreateSessionRequest(BaseModel):
+    title: str | None = Field(None, max_length=80)
+
+
+class RenameSessionRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=80)
+
+
+# Two role vocabularies live in this app:
+#   - UI / persistence:  user | bot | sys | tool     (what the sidebar renders)
+#   - LLM protocol:      system | user | assistant | tool  (Ollama/MLX chat API)
+# Overlap at 'user' and 'tool' is intentional; 'bot' ↔ 'assistant' and
+# 'sys' ↔ 'system' differ so the UI can style sys messages (orange amber)
+# without them being confused with the LLM's system prompt.
+UI_ROLES = ("user", "bot", "sys", "tool")
+
+
+class AppendMessageRequest(BaseModel):
+    role: str = Field(..., pattern=f"^({'|'.join(UI_ROLES)})$")
+    content: str = Field(..., max_length=2_000_000)  # base64 image inline can be big
+    meta: dict | None = None
+
+
+class UpdateMessageRequest(BaseModel):
+    content: str = Field("", max_length=2_000_000)
+    meta: dict | None = None
+
+
+class AddMcpServerRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=60)
+    url: str = Field(..., min_length=1, max_length=500)
+    headers: dict[str, str] | None = None
+
+
+class UpdateMcpServerRequest(BaseModel):
+    enabled: bool
+
+
+class McpCallRequest(BaseModel):
+    tool: str = Field(..., min_length=1, max_length=200)  # mangled name
+    arguments: dict = Field(default_factory=dict)
+
+
 class ScanRequest(BaseModel):
     image: str = Field(..., description="Base64 JPEG/PNG (no data-url prefix)")
     max_objects: int = Field(10, ge=1, le=30)

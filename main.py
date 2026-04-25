@@ -6,12 +6,15 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import detect as detect_module
 import logging_setup
+import mcp_client
+import memory
 import mlx_client
 import stats as sysstats
 from config import settings
@@ -58,6 +61,15 @@ from schemas import (
     SpeakResponse,
     ToolExecRequest,
     ToolExecResponse,
+    Txt2ImgRequest,
+    Txt2ImgResponse,
+    AppendMessageRequest,
+    CreateSessionRequest,
+    RenameSessionRequest,
+    UpdateMessageRequest,
+    AddMcpServerRequest,
+    UpdateMcpServerRequest,
+    McpCallRequest,
     TranscribeRequest,
     TranscribeResponse,
     TranslateRequest,
@@ -67,25 +79,38 @@ from schemas import (
 logging_setup.configure()
 log = logging.getLogger("chatlm")
 
-# Mutable runtime state, swappable via /models/* endpoints.
-_STATE: dict[str, str] = {
-    "emma": settings.model_name,
-    "scan": settings.model_name,
-    "detector": "yolov8s-world.pt",
-    "segmenter": "mobile_sam.pt",
-    "inpaint": "sd15-lcm-fast",
-}
+from dataclasses import dataclass, fields as _dc_fields
 
-MAX_LOCAL_MODEL_GB = 15.0  # hide 26B/31B variants from the dropdown
+
+@dataclass
+class AppState:
+    """Runtime model-selection state. Each field is the currently-active
+    model/preset for a given subsystem; swapped by /models/<field>."""
+    emma: str
+    scan: str
+    detector: str = "yolov8s-world.pt"
+    segmenter: str = "mobile_sam.pt"
+    inpaint: str = "sd15-lcm-fast"
+    txt2img: str = "sdxl-base"
+
+    def values_for_eviction(self) -> tuple[str, ...]:
+        """Every currently-referenced model name — used by the MLX orphan
+        check to decide whether it's safe to unload the prior selection."""
+        return tuple(getattr(self, f.name) for f in _dc_fields(self))
+
+
+_STATE = AppState(emma=settings.model_name, scan=settings.model_name)
+
+MAX_LOCAL_MODEL_GB = 20.0  # fits gemma4:26b-a4b Q4 (~15 GB); Q8 (>27 GB) still hidden
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    log.info(f"startup · emma={_STATE['emma']} · scan={_STATE['scan']} · detector={_STATE['detector']} · segmenter={_STATE['segmenter']} · ollama={settings.ollama_host}")
+    log.info(f"startup · emma={_STATE.emma} · scan={_STATE.scan} · detector={_STATE.detector} · segmenter={_STATE.segmenter} · ollama={settings.ollama_host}")
     t0 = time.perf_counter()
     try:
         await client.generate(
-            model=_STATE["emma"],
+            model=_STATE.emma,
             prompt="ok",
             temperature=0.0,
             max_tokens=1,
@@ -93,6 +118,26 @@ async def lifespan(_: FastAPI):
         log.info(f"warmup complete in {time.perf_counter() - t0:.2f}s")
     except Exception as err:
         log.warning(f"warmup failed: {err}")
+    # Re-probe any MCP servers the user configured in previous sessions.
+    # Probes run in parallel so a single slow/dead server doesn't hold
+    # the app hostage; failures are logged but non-fatal.
+    try:
+        import sessions as _sessions_mod
+        saved = _sessions_mod.load_mcp_servers()
+        async def _restore(row):
+            try:
+                srv = await mcp_client.add_server(row["name"], row["url"], row["headers"])
+                # Preserve the DB id instead of the fresh UUID so stored
+                # enabled state + next /mcp/servers GET is consistent.
+                mcp_client._registry.pop(srv.id, None)
+                srv.id = row["id"]
+                srv.enabled = row["enabled"]
+                mcp_client._registry[srv.id] = srv
+            except Exception as err:
+                log.warning(f"MCP restore failed for {row['name']!r}: {err}")
+        await asyncio.gather(*[_restore(r) for r in saved])
+    except Exception as err:
+        log.debug(f"MCP restore skipped: {err}")
     yield
     await client.close()
 
@@ -100,7 +145,26 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="chatlm", version="0.1.0", lifespan=lifespan)
 
 STATIC_DIR = Path(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+class _NoCacheStatic(StaticFiles):
+    """Tiny subclass that slaps Cache-Control: no-store on every static
+    response. Aggressive browser caching of ES modules during dev makes
+    code changes invisible without Cmd+Shift+R — this keeps iteration
+    tight. Safe because the whole app is localhost-only."""
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
+app.mount("/static", _NoCacheStatic(directory=STATIC_DIR), name="static")
+
+# Persistent on-disk storage for generated images. Layout:
+#   storage/images/<session_id>/<uuid>.png   — per-session
+#   storage/images/_inline/<uuid>.png        — generated outside any session
+# Served at /storage so the frontend just dereferences the URL.
+STORAGE_DIR = Path(__file__).parent / "storage"
+(STORAGE_DIR / "images").mkdir(parents=True, exist_ok=True)
+app.mount("/storage", StaticFiles(directory=STORAGE_DIR), name="storage")
 
 
 @app.get("/", include_in_schema=False)
@@ -111,7 +175,7 @@ async def index() -> FileResponse:
 @app.get("/stats")
 async def stats_endpoint() -> dict:
     data = await asyncio.to_thread(sysstats.collect)
-    current = _STATE["emma"]
+    current = _STATE.emma
     model_info = None
     # Merge Ollama + MLX catalogues so MLX models also report params/quant.
     try:
@@ -144,7 +208,8 @@ async def stats_endpoint() -> dict:
     except Exception:
         pass
     data["model"] = model_info or {"name": current, "backend": "mlx" if mlx_client.is_mlx_name(current) else "ollama"}
-    data["state"] = dict(_STATE)
+    from dataclasses import asdict
+    data["state"] = asdict(_STATE)
     return data
 
 
@@ -156,7 +221,7 @@ async def health() -> dict:
         raise HTTPException(status_code=503, detail=str(err)) from err
     except Exception as err:
         raise HTTPException(status_code=503, detail=f"ollama unreachable: {err}") from err
-    return {"status": "ok", "default_model": _STATE["emma"], "models": models.get("models", [])}
+    return {"status": "ok", "default_model": _STATE.emma, "models": models.get("models", [])}
 
 
 def _prompt_stats(messages: list) -> tuple[int, int]:
@@ -164,17 +229,47 @@ def _prompt_stats(messages: list) -> tuple[int, int]:
     return len(messages), total_chars
 
 
+def _merge_tools_with_mcp(user_tools: list[dict] | None) -> list[dict] | None:
+    """Append every enabled MCP server's tool list (OpenAI-shaped) onto
+    the frontend-provided tools array. Returns None if neither source
+    contributes anything — keeps `tools=` unset for plain chat requests."""
+    mcp_tools = mcp_client.get_enabled_tools_openai_shape()
+    if not user_tools and not mcp_tools:
+        return None
+    return (user_tools or []) + mcp_tools
+
+
+async def _pick_tool_fallback() -> str:
+    """When the selected model is MLX and tools are requested, MLX can't
+    drive tool calls — fall back to an installed Ollama model. Prefers
+    the largest available (26b-a4b MoE > e4b > e2b). Override via the
+    CHATLM_TOOL_FALLBACK env var."""
+    import os
+    override = os.environ.get("CHATLM_TOOL_FALLBACK")
+    if override:
+        return override
+    try:
+        installed = {m.get("name") for m in (await client.list_models()).get("models", [])}
+    except Exception:
+        installed = set()
+    for candidate in ("gemma4:26b", "gemma4:e4b", "gemma4:e2b"):
+        if candidate in installed:
+            return candidate
+    return "gemma4:e4b"
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
     if request.stream:
         raise HTTPException(status_code=400, detail="Use /chat/stream for streaming")
-    model = request.model or _STATE["emma"]
-    if request.tools and mlx_client.is_mlx_name(model):
-        model = "gemma4:e2b"
+    model = request.model or _STATE.emma
+    effective_tools = _merge_tools_with_mcp(request.tools)
+    if effective_tools and mlx_client.is_mlx_name(model):
+        model = await _pick_tool_fallback()
     msgs = [m.model_dump(exclude_none=True) for m in request.messages]
     n_msgs, n_chars = _prompt_stats(msgs)
     backend = _dispatch(model)
-    log.info(f"/chat <- model={model} msgs={n_msgs} chars={n_chars} think={request.think} tools={bool(request.tools)} backend={'mlx' if backend is mlx_client else 'ollama'}")
+    log.info(f"/chat <- model={model} msgs={n_msgs} chars={n_chars} think={request.think} tools={len(effective_tools) if effective_tools else 0} backend={'mlx' if backend is mlx_client else 'ollama'}")
     t0 = time.perf_counter()
     try:
         raw = await backend.chat(
@@ -183,7 +278,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
             temperature=request.temperature,
             max_tokens=request.max_tokens,
             think=request.think,
-            tools=request.tools,
+            tools=effective_tools,
         )
     except OllamaError as err:
         log.error(f"/chat !! {err}")
@@ -219,15 +314,16 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
-    model = request.model or _STATE["emma"]
+    model = request.model or _STATE.emma
+    effective_tools = _merge_tools_with_mcp(request.tools)
     # MLX has no tool-calling path, so re-route tool requests to an Ollama
     # model that does (gemma4:e2b supports tool_calls via Ollama's template).
-    if request.tools and mlx_client.is_mlx_name(model):
-        model = "gemma4:e2b"
+    if effective_tools and mlx_client.is_mlx_name(model):
+        model = await _pick_tool_fallback()
     msgs = [m.model_dump(exclude_none=True) for m in request.messages]
     n_msgs, n_chars = _prompt_stats(msgs)
     backend = _dispatch(model)
-    log.info(f"/chat/stream <- model={model} msgs={n_msgs} chars={n_chars} think={request.think} tools={bool(request.tools)} backend={'mlx' if backend is mlx_client else 'ollama'}")
+    log.info(f"/chat/stream <- model={model} msgs={n_msgs} chars={n_chars} think={request.think} tools={len(effective_tools) if effective_tools else 0} backend={'mlx' if backend is mlx_client else 'ollama'}")
 
     async def event_stream():
         t0 = time.perf_counter()
@@ -240,7 +336,7 @@ async def chat_stream(request: ChatRequest):
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
                 think=request.think,
-                tools=request.tools,
+                tools=effective_tools,
             ):
                 if ttft is None:
                     ttft = time.perf_counter() - t0
@@ -254,6 +350,13 @@ async def chat_stream(request: ChatRequest):
         except OllamaError as err:
             log.error(f"/chat/stream !! {err}")
             yield f'{{"error": {str(err)!r}}}\n'
+            return
+        except (httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError) as err:
+            # Upstream Ollama crashed or stalled longer than allowed. Send
+            # the error as a final SSE event so the browser shows a real
+            # message instead of "network error" from a torn TCP connection.
+            log.error(f"/chat/stream !! upstream-stream-error {type(err).__name__}: {err}")
+            yield f'{{"error": "upstream stream error: {type(err).__name__} — Ollama may have crashed or run out of memory. Try /memory/flush and resend."}}\n'
             return
 
         wall = time.perf_counter() - t0
@@ -320,7 +423,7 @@ async def scan_endpoint(request: ScanRequest) -> ScanResponse:
     else:
         body = _DEFAULT_SCAN_TEMPLATE.format(max_objects=request.max_objects)
     prompt = body + _SCAN_JSON_SUFFIX
-    scan_model = _STATE["scan"]
+    scan_model = _STATE.scan
     backend = _dispatch(scan_model)
     try:
         raw = await backend.chat(
@@ -418,12 +521,15 @@ async def list_models_endpoint() -> dict:
     segmenters = [{"name": k, "label": v["label"], "kind": v["kind"]} for k, v in detect_module.SEGMENTER_PRESETS.items()]
     import inpaint as inpaint_mod
     inpaints = [{"name": k, "label": v["label"]} for k, v in inpaint_mod.INPAINT_PRESETS.items()]
+    import txt2img as txt2img_mod
+    txt2imgs = txt2img_mod.list_presets()
     return {
-        "emma": {"current": _STATE["emma"], "available": available},
-        "scan": {"current": _STATE["scan"], "available": available},
-        "detector": {"current": _STATE["detector"], "presets": detectors},
-        "segmenter": {"current": _STATE["segmenter"], "presets": segmenters},
-        "inpaint": {"current": _STATE["inpaint"], "presets": inpaints},
+        "emma": {"current": _STATE.emma, "available": available},
+        "scan": {"current": _STATE.scan, "available": available},
+        "detector": {"current": _STATE.detector, "presets": detectors},
+        "segmenter": {"current": _STATE.segmenter, "presets": segmenters},
+        "inpaint": {"current": _STATE.inpaint, "presets": inpaints},
+        "txt2img": {"current": _STATE.txt2img, "presets": txt2imgs},
     }
 
 
@@ -443,20 +549,37 @@ async def _validate_chat_model(name: str) -> None:
         raise HTTPException(status_code=400, detail=f"model '{name}' not installed on Ollama")
 
 
+def _evict_orphan_mlx(old_name: str) -> None:
+    """After a dropdown switch, unload the previous MLX model iff no other
+    state slot still points at it. Prevents the EMMA/SCAN dropdowns from
+    accumulating multi-GB resident models in unified memory."""
+    if not mlx_client.is_mlx_name(old_name):
+        return
+    if old_name in _STATE.values_for_eviction():
+        return  # still referenced (e.g. SCAN still points at it)
+    mlx_client.unload_model(old_name)
+
+
 @app.post("/models/emma")
 async def set_emma(req: SetModelRequest) -> dict:
     await _validate_chat_model(req.name)
-    _STATE["emma"] = req.name
+    old = _STATE.emma
+    _STATE.emma = req.name
+    if old != req.name:
+        _evict_orphan_mlx(old)
     log.info(f"/models/emma -> {req.name}")
-    return {"current": _STATE["emma"]}
+    return {"current": _STATE.emma}
 
 
 @app.post("/models/scan")
 async def set_scan(req: SetModelRequest) -> dict:
     await _validate_chat_model(req.name)
-    _STATE["scan"] = req.name
+    old = _STATE.scan
+    _STATE.scan = req.name
+    if old != req.name:
+        _evict_orphan_mlx(old)
     log.info(f"/models/scan -> {req.name}")
-    return {"current": _STATE["scan"]}
+    return {"current": _STATE.scan}
 
 
 @app.post("/models/detector")
@@ -465,7 +588,7 @@ async def set_detector(req: SetModelRequest) -> dict:
         await asyncio.to_thread(detect_module.set_detector, req.name)
     except Exception as err:
         raise HTTPException(status_code=500, detail=f"detector load failed: {err}") from err
-    _STATE["detector"] = req.name
+    _STATE.detector = req.name
     log.info(f"/models/detector -> {req.name}")
     return {"current": req.name}
 
@@ -476,7 +599,7 @@ async def set_segmenter(req: SetModelRequest) -> dict:
         await asyncio.to_thread(detect_module.set_segmenter, req.name)
     except Exception as err:
         raise HTTPException(status_code=500, detail=f"segmenter load failed: {err}") from err
-    _STATE["segmenter"] = req.name
+    _STATE.segmenter = req.name
     log.info(f"/models/segmenter -> {req.name}")
     return {"current": req.name}
 
@@ -488,7 +611,7 @@ async def set_inpaint(req: SetModelRequest) -> dict:
         await asyncio.to_thread(inpaint_mod.set_preset, req.name)
     except Exception as err:
         raise HTTPException(status_code=400, detail=f"inpaint preset failed: {err}") from err
-    _STATE["inpaint"] = req.name
+    _STATE.inpaint = req.name
     log.info(f"/models/inpaint -> {req.name}")
     return {"current": req.name}
 
@@ -497,6 +620,247 @@ async def set_inpaint(req: SetModelRequest) -> dict:
 @app.post("/models/yolo")
 async def set_yolo_alias(req: SetModelRequest) -> dict:
     return await set_detector(req)
+
+
+def _make_image_path(session_id: str | None) -> tuple[str, Path]:
+    """Compose the per-session disk path for a freshly generated image."""
+    import uuid as _uuid
+    sid = session_id or "_inline"
+    rel = f"images/{sid}/{_uuid.uuid4().hex}.png"
+    return rel, STORAGE_DIR / rel
+
+
+def _txt2img_kwargs(request: Txt2ImgRequest, abs_path: Path, **extra) -> dict:
+    """All the per-call args shared by the blocking and streaming endpoints."""
+    return dict(
+        prompt=request.prompt,
+        negative_prompt=request.negative_prompt,
+        preset_key=request.preset,
+        steps=request.steps,
+        guidance=request.guidance,
+        width=request.width,
+        height=request.height,
+        seed=request.seed,
+        out_path=str(abs_path),
+        **extra,
+    )
+
+
+@app.post("/txt2img", response_model=Txt2ImgResponse)
+async def txt2img_endpoint(request: Txt2ImgRequest) -> Txt2ImgResponse:
+    import txt2img as txt2img_mod
+    rel_path, abs_path = _make_image_path(request.session_id)
+    await memory.prepare_for_diffusion()
+    try:
+        res = await asyncio.to_thread(
+            txt2img_mod.generate_image,
+            **_txt2img_kwargs(request, abs_path),
+        )
+    except Exception as err:
+        log.error(f"/txt2img !! {err}")
+        raise HTTPException(status_code=500, detail=str(err)) from err
+    return Txt2ImgResponse(
+        image_url=f"/storage/{rel_path}",
+        path=str(abs_path),
+        width=res["width"],
+        height=res["height"],
+        preset=res["preset"],
+        steps=res["steps"],
+        latency_ms=res["latency_ms"],
+    )
+
+
+@app.post("/txt2img/stream")
+async def txt2img_stream(request: Txt2ImgRequest):
+    """SSE/NDJSON stream emitting per-step progress and a final 'done' event
+    with the disk URL. Frontend uses this to drive a real progress bar
+    instead of the time-estimated one."""
+    import txt2img as txt2img_mod
+    rel_path, abs_path = _make_image_path(request.session_id)
+    await memory.prepare_for_diffusion()
+
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def on_step(step: int, total: int) -> None:
+        # Called from the diffusion worker thread — bounce to the loop.
+        loop.call_soon_threadsafe(
+            queue.put_nowait, {"type": "step", "step": step, "total": total}
+        )
+
+    async def run_generation() -> None:
+        try:
+            res = await asyncio.to_thread(
+                txt2img_mod.generate_image,
+                **_txt2img_kwargs(request, abs_path, step_callback=on_step),
+            )
+            await queue.put({
+                "type": "done",
+                "image_url": f"/storage/{rel_path}",
+                "path": str(abs_path),
+                "width": res["width"],
+                "height": res["height"],
+                "preset": res["preset"],
+                "steps": res["steps"],
+                "latency_ms": res["latency_ms"],
+            })
+        except Exception as err:
+            log.error(f"/txt2img/stream !! {err}")
+            await queue.put({"type": "error", "detail": str(err)})
+        finally:
+            await queue.put(None)  # sentinel: end of stream
+
+    async def event_gen():
+        task = asyncio.create_task(run_generation())
+        try:
+            while True:
+                evt = await queue.get()
+                if evt is None:
+                    break
+                yield json.dumps(evt) + "\n"
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(event_gen(), media_type="application/x-ndjson")
+
+
+@app.post("/memory/flush")
+async def memory_flush() -> dict:
+    """Force-evict every model resident in our process and the Ollama daemon.
+    Useful when a heavy task (diffusion, video pipeline) is queued and unified
+    memory is tight."""
+    return await memory.flush_all(reason="/memory/flush")
+
+
+@app.post("/models/txt2img")
+async def set_txt2img(req: SetModelRequest) -> dict:
+    import txt2img as txt2img_mod
+    try:
+        await asyncio.to_thread(txt2img_mod.set_current, req.name)
+    except Exception as err:
+        raise HTTPException(status_code=400, detail=f"txt2img preset failed: {err}") from err
+    _STATE.txt2img = req.name
+    log.info(f"/models/txt2img -> {req.name}")
+    return {"current": req.name}
+
+
+# ---------- chat session persistence (SQLite via sessions.py) ----------
+
+import sessions as sessions_mod
+
+
+@app.get("/sessions")
+async def list_sessions_endpoint() -> dict:
+    return {"sessions": sessions_mod.list_sessions()}
+
+
+@app.post("/sessions")
+async def create_session_endpoint(req: CreateSessionRequest) -> dict:
+    return sessions_mod.create_session(req.title)
+
+
+@app.get("/sessions/{sid}/messages")
+async def get_session_messages(sid: str) -> dict:
+    if not sessions_mod.get_session(sid):
+        raise HTTPException(status_code=404, detail=f"session not found: {sid}")
+    return {"session": sessions_mod.get_session(sid), "messages": sessions_mod.list_messages(sid)}
+
+
+@app.post("/sessions/{sid}/messages")
+async def append_session_message(sid: str, req: AppendMessageRequest) -> dict:
+    try:
+        return sessions_mod.append_message(sid, req.role, req.content, req.meta)
+    except KeyError as err:
+        raise HTTPException(status_code=404, detail=str(err)) from err
+
+
+@app.patch("/sessions/{sid}/messages/{mid}")
+async def update_session_message(sid: str, mid: int, req: UpdateMessageRequest) -> dict:
+    """Replace an existing row's content + meta. Used by the chat client
+    to swap an in-progress placeholder for the final streamed text."""
+    out = sessions_mod.update_message(sid, mid, req.content, req.meta)
+    if out is None:
+        raise HTTPException(status_code=404, detail=f"message {mid} not in session {sid}")
+    return out
+
+
+@app.patch("/sessions/{sid}")
+async def rename_session_endpoint(sid: str, req: RenameSessionRequest) -> dict:
+    out = sessions_mod.rename_session(sid, req.title)
+    if not out:
+        raise HTTPException(status_code=404, detail=f"session not found: {sid}")
+    return out
+
+
+@app.delete("/sessions/{sid}")
+async def delete_session_endpoint(sid: str) -> dict:
+    if not sessions_mod.delete_session(sid):
+        raise HTTPException(status_code=404, detail=f"session not found: {sid}")
+    return {"deleted": sid}
+
+
+# ---------- MCP (Model Context Protocol) remote tool servers ----------
+
+
+@app.get("/mcp/servers")
+async def list_mcp_servers() -> dict:
+    return {"servers": mcp_client.list_servers()}
+
+
+@app.post("/mcp/servers")
+async def add_mcp_server(req: AddMcpServerRequest) -> dict:
+    try:
+        srv = await mcp_client.add_server(req.name, req.url, req.headers or {})
+    except Exception as err:
+        raise HTTPException(status_code=400, detail=f"MCP probe failed: {err}") from err
+    sessions_mod.save_mcp_server(srv.id, srv.name, srv.url, srv.headers, srv.enabled)
+    return mcp_client.list_servers()[-1] if False else {
+        "id": srv.id, "name": srv.name, "url": srv.url, "enabled": srv.enabled,
+        "tools": [{"name": t.name, "mangled_name": t.mangled_name, "description": t.description} for t in srv.tools],
+    }
+
+
+@app.patch("/mcp/servers/{sid}")
+async def update_mcp_server(sid: str, req: UpdateMcpServerRequest) -> dict:
+    if not mcp_client.set_enabled(sid, req.enabled):
+        raise HTTPException(status_code=404, detail=f"MCP server not found: {sid}")
+    sessions_mod.update_mcp_server(sid, enabled=req.enabled)
+    return {"id": sid, "enabled": req.enabled}
+
+
+@app.post("/mcp/servers/{sid}/reconnect")
+async def reconnect_mcp_server(sid: str) -> dict:
+    try:
+        srv = await mcp_client.reconnect(sid)
+    except KeyError as err:
+        raise HTTPException(status_code=404, detail=f"MCP server not found: {sid}") from err
+    except Exception as err:
+        raise HTTPException(status_code=400, detail=f"MCP reconnect failed: {err}") from err
+    return {"id": srv.id, "tools": len(srv.tools)}
+
+
+@app.delete("/mcp/servers/{sid}")
+async def delete_mcp_server(sid: str) -> dict:
+    removed = mcp_client.remove_server(sid)
+    sessions_mod.delete_mcp_server(sid)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"MCP server not found: {sid}")
+    return {"deleted": sid}
+
+
+@app.post("/mcp/call")
+async def call_mcp_tool(req: McpCallRequest) -> dict:
+    """Invoked by the frontend's dispatchToolCall when the LLM emits a
+    tool_call whose name begins with 'mcp_'. Opens a fresh Streamable-HTTP
+    session, forwards the call, returns text + structured."""
+    try:
+        return await mcp_client.dispatch_mangled(req.tool, req.arguments)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    except Exception as err:
+        log.error(f"/mcp/call !! {err}")
+        raise HTTPException(status_code=500, detail=str(err)) from err
 
 
 MAX_TOOL_OUTPUT = 8000  # truncate large outputs so the context doesn't blow up
@@ -544,53 +908,67 @@ async def inpaint_endpoint(request: InpaintRequest) -> InpaintResponse:
     return InpaintResponse(**result, latency_ms=latency_ms)
 
 
+async def _run_vision_op(label: str, response_cls, fn, *args, summary=None):
+    """Common wrapper for short-lived vision/audio endpoints. Dispatches
+    `fn(*args)` to a worker thread, converts exceptions to 500s, and logs
+    a one-liner with latency + optional per-op summary.
+
+    `summary` is a callable taking the raw result dict and returning a
+    short trailing string (e.g. `lambda r: f"people={len(r['people'])}"`).
+    Returns an instance of response_cls populated from the result dict."""
+    try:
+        res = await asyncio.to_thread(fn, *args)
+    except HTTPException:
+        raise
+    except Exception as err:
+        log.error(f"/{label} !! {err}")
+        raise HTTPException(status_code=500, detail=str(err)) from err
+    extra = f" {summary(res)}" if summary else ""
+    latency = res.get("latency_ms") if isinstance(res, dict) else None
+    if latency is not None:
+        log.info(f"/{label} -> {latency}ms{extra}")
+    else:
+        log.info(f"/{label} ->{extra}")
+    return response_cls(**res)
+
+
 @app.post("/pose", response_model=PoseResponse)
 async def pose_endpoint(request: PoseRequest) -> PoseResponse:
     import vision
-    t0 = time.perf_counter()
-    try:
-        res = await asyncio.to_thread(vision.pose_estimate, request.image, request.conf, request.imgsz)
-    except Exception as err:
-        log.error(f"/pose !! {err}")
-        raise HTTPException(status_code=500, detail=str(err)) from err
-    log.info(f"/pose -> {int((time.perf_counter()-t0)*1000)}ms people={len(res['people'])}")
-    return PoseResponse(**res)
+    return await _run_vision_op(
+        "pose", PoseResponse, vision.pose_estimate,
+        request.image, request.conf, request.imgsz,
+        summary=lambda r: f"people={len(r['people'])}",
+    )
 
 
 @app.post("/depth", response_model=DepthResponse)
 async def depth_endpoint(request: DepthRequest) -> DepthResponse:
     import vision
-    try:
-        res = await asyncio.to_thread(vision.estimate_depth, request.image, request.colormap)
-    except Exception as err:
-        log.error(f"/depth !! {err}")
-        raise HTTPException(status_code=500, detail=str(err)) from err
-    log.info(f"/depth -> {res['latency_ms']}ms {res['width']}x{res['height']}")
-    return DepthResponse(**res)
+    return await _run_vision_op(
+        "depth", DepthResponse, vision.estimate_depth,
+        request.image, request.colormap,
+        summary=lambda r: f"{r['width']}x{r['height']}",
+    )
 
 
 @app.post("/ocr", response_model=OcrResponse)
 async def ocr_endpoint(request: ImageOnlyRequest) -> OcrResponse:
     import vision
-    try:
-        res = await asyncio.to_thread(vision.ocr, request.image)
-    except Exception as err:
-        log.error(f"/ocr !! {err}")
-        raise HTTPException(status_code=500, detail=str(err)) from err
-    log.info(f"/ocr -> {res['latency_ms']}ms items={len(res['items'])}")
-    return OcrResponse(**res)
+    return await _run_vision_op(
+        "ocr", OcrResponse, vision.ocr, request.image,
+        summary=lambda r: f"items={len(r['items'])}",
+    )
 
 
 @app.post("/transcribe", response_model=TranscribeResponse)
 async def transcribe_endpoint(request: TranscribeRequest) -> TranscribeResponse:
     import audio
-    try:
-        res = await asyncio.to_thread(audio.transcribe, request.audio, request.language)
-    except Exception as err:
-        log.error(f"/transcribe !! {err}")
-        raise HTTPException(status_code=500, detail=str(err)) from err
-    log.info(f"/transcribe -> {res['latency_ms']}ms chars={len(res['text'])}")
-    return TranscribeResponse(**res)
+    return await _run_vision_op(
+        "transcribe", TranscribeResponse, audio.transcribe,
+        request.audio, request.language,
+        summary=lambda r: f"chars={len(r['text'])}",
+    )
 
 
 @app.post("/translate", response_model=TranslateResponse)
@@ -613,7 +991,7 @@ async def translate_endpoint(request: TranslateRequest) -> TranslateResponse:
         raise HTTPException(status_code=400, detail="no speech detected")
 
     # 2) Translate via Gemma — terse prompt + JSON-ish output we can post-process.
-    model = _STATE["emma"]
+    model = _STATE.emma
     backend = _dispatch(model)
     trans_prompt = (
         f"Translate the following sentence to {request.target_language}. "
@@ -667,27 +1045,21 @@ async def translate_endpoint(request: TranslateRequest) -> TranslateResponse:
 @app.post("/speak", response_model=SpeakResponse)
 async def speak_endpoint(request: SpeakRequest) -> SpeakResponse:
     import audio
-    try:
-        res = await asyncio.to_thread(audio.speak, request.text, request.voice, request.speed)
-    except Exception as err:
-        log.error(f"/speak !! {err}")
-        raise HTTPException(status_code=500, detail=str(err)) from err
-    log.info(f"/speak -> {res['latency_ms']}ms samples={res['samples']}")
-    return SpeakResponse(**res)
+    return await _run_vision_op(
+        "speak", SpeakResponse, audio.speak,
+        request.text, request.voice, request.speed,
+        summary=lambda r: f"samples={r['samples']}",
+    )
 
 
 @app.post("/voice-clone", response_model=SpeakResponse)
 async def voice_clone_endpoint(request: CloneVoiceRequest) -> SpeakResponse:
     import audio as _audio
-    try:
-        res = await asyncio.to_thread(
-            _audio.clone_voice, request.ref_audio, request.ref_text, request.gen_text,
-        )
-    except Exception as err:
-        log.error(f"/voice-clone !! {err}")
-        raise HTTPException(status_code=500, detail=str(err)) from err
-    log.info(f"/voice-clone -> {res['latency_ms']}ms samples={res['samples']}")
-    return SpeakResponse(**res)
+    return await _run_vision_op(
+        "voice-clone", SpeakResponse, _audio.clone_voice,
+        request.ref_audio, request.ref_text, request.gen_text,
+        summary=lambda r: f"samples={r['samples']}",
+    )
 
 
 @app.get("/voices")
@@ -699,71 +1071,59 @@ async def voices_endpoint() -> dict:
 @app.post("/segment-people", response_model=PeopleSegResponse)
 async def people_endpoint(request: ImageOnlyRequest) -> PeopleSegResponse:
     import vision
-    try:
-        res = await asyncio.to_thread(vision.people_segment, request.image)
-    except Exception as err:
-        log.error(f"/segment-people !! {err}")
-        raise HTTPException(status_code=500, detail=str(err)) from err
-    log.info(f"/segment-people -> {res['latency_ms']}ms count={res['count']}")
-    return PeopleSegResponse(**res)
+    return await _run_vision_op(
+        "segment-people", PeopleSegResponse, vision.people_segment,
+        request.image,
+        summary=lambda r: f"count={r['count']}",
+    )
 
 
 @app.post("/anime", response_model=AnimeResponse)
 async def anime_endpoint(request: AnimeRequest) -> AnimeResponse:
     import vision
-    try:
-        res = await asyncio.to_thread(vision.anime_stylize, request.image, request.style, request.size)
-    except Exception as err:
-        log.error(f"/anime !! {err}")
-        raise HTTPException(status_code=500, detail=str(err)) from err
-    return AnimeResponse(**res)
+    return await _run_vision_op(
+        "anime", AnimeResponse, vision.anime_stylize,
+        request.image, request.style, request.size,
+    )
 
 
 @app.post("/bg-sub", response_model=BgSubResponse)
 async def bg_sub_endpoint(request: BgSubRequest) -> BgSubResponse:
     import vision
-    try:
-        res = await asyncio.to_thread(vision.bg_subtract, request.image, request.reset)
-    except Exception as err:
-        log.error(f"/bg-sub !! {err}")
-        raise HTTPException(status_code=500, detail=str(err)) from err
-    return BgSubResponse(**res)
+    return await _run_vision_op(
+        "bg-sub", BgSubResponse, vision.bg_subtract,
+        request.image, request.reset,
+    )
 
 
 @app.post("/segment-all", response_model=SegmentAllResponse)
 async def segment_all_endpoint(request: SegmentAllRequest) -> SegmentAllResponse:
     import vision
-    try:
-        res = await asyncio.to_thread(vision.segment_all, request.image, request.imgsz, request.conf)
-    except Exception as err:
-        log.error(f"/segment-all !! {err}")
-        raise HTTPException(status_code=500, detail=str(err)) from err
-    log.info(f"/segment-all -> {res['latency_ms']}ms count={res['count']}")
-    return SegmentAllResponse(**res)
+    return await _run_vision_op(
+        "segment-all", SegmentAllResponse, vision.segment_all,
+        request.image, request.imgsz, request.conf,
+        summary=lambda r: f"count={r['count']}",
+    )
 
 
 @app.post("/face", response_model=FaceMeshResponse)
 async def face_endpoint(request: FaceRequest) -> FaceMeshResponse:
     import vision
-    try:
-        res = await asyncio.to_thread(vision.face_mesh, request.image, request.emotion, request.head_pose)
-    except Exception as err:
-        log.error(f"/face !! {err}")
-        raise HTTPException(status_code=500, detail=str(err)) from err
-    log.info(f"/face -> {res['latency_ms']}ms faces={len(res['faces'])} emotion={request.emotion}")
-    return FaceMeshResponse(**res)
+    return await _run_vision_op(
+        "face", FaceMeshResponse, vision.face_mesh,
+        request.image, request.emotion, request.head_pose,
+        summary=lambda r: f"faces={len(r['faces'])} emotion={request.emotion}",
+    )
 
 
 @app.post("/remove-bg", response_model=RmbgResponse)
 async def rmbg_endpoint(request: RmbgRequest) -> RmbgResponse:
     import vision
-    try:
-        res = await asyncio.to_thread(vision.remove_bg, request.image, request.return_mask)
-    except Exception as err:
-        log.error(f"/remove-bg !! {err}")
-        raise HTTPException(status_code=500, detail=str(err)) from err
-    log.info(f"/remove-bg -> {res['latency_ms']}ms {res['width']}x{res['height']}")
-    return RmbgResponse(**res)
+    return await _run_vision_op(
+        "remove-bg", RmbgResponse, vision.remove_bg,
+        request.image, request.return_mask,
+        summary=lambda r: f"{r['width']}x{r['height']}",
+    )
 
 
 @app.post("/img2img", response_model=Img2ImgResponse)
@@ -792,6 +1152,56 @@ async def img2img_endpoint(request: Img2ImgRequest) -> Img2ImgResponse:
 
 
 
+_TOOL_EXEC_DENYLIST = (
+    "rm -rf /",
+    "rm -rf /*",
+    "sudo rm",
+    "sudo dd",
+    "mkfs",
+    ":(){:|:&};:",          # fork-bomb
+    "> /dev/sda",
+    "dd if=/dev/zero",
+    "shutdown",
+    "reboot",
+    "halt",
+    "killall -9 Finder",     # cosmetic UI-nuke
+)
+
+
+def _resolve_tool_cwd(cwd: str | None) -> str | None:
+    """Expand ~ and require the resolved path to live inside $HOME.
+    Returns None if no cwd was requested. Raises 400 on a hostile path."""
+    import os
+    if not cwd:
+        return None
+    home = os.path.expanduser("~")
+    resolved = os.path.realpath(os.path.expanduser(cwd))
+    if not (resolved == home or resolved.startswith(home + os.sep)):
+        raise HTTPException(status_code=400, detail=f"cwd {cwd!r} must be inside {home}")
+    return resolved
+
+
+def _validate_tool_command(command: str) -> None:
+    """Cheap safety gate for the `run_shell` tool. Auto-approve lets a
+    confused model run commands without a human in the loop; this catches
+    the obvious footguns. Not a security boundary — just a sanity check.
+
+    Normalises the input before matching so trivial obfuscations (extra
+    whitespace, quoted binary, /bin/ prefix, backslash escape) don't slip
+    through the literal-substring denylist."""
+    lowered = command.strip().lower()
+    # Collapse whitespace runs so `rm   -rf   /` still matches `rm -rf /`.
+    collapsed = re.sub(r"\s+", " ", lowered)
+    # Strip quotes/backslashes around the first token and drop a leading
+    # path prefix so "/bin/rm -rf /", '"rm" -rf /', '\rm -rf /' all match.
+    stripped = re.sub(r"""[\\"']""", "", collapsed)
+    stripped = re.sub(r"^\S*/(?=\S)", "", stripped)
+    haystacks = (lowered, collapsed, stripped)
+    for pat in _TOOL_EXEC_DENYLIST:
+        if any(pat in h for h in haystacks):
+            raise HTTPException(status_code=400, detail=f"command blocked by safety denylist ({pat!r})")
+
+
 @app.post("/tools/exec", response_model=ToolExecResponse)
 async def tools_exec(request: ToolExecRequest) -> ToolExecResponse:
     """Run an arbitrary shell command. Caller (frontend) MUST have already
@@ -799,13 +1209,16 @@ async def tools_exec(request: ToolExecRequest) -> ToolExecResponse:
     import asyncio
     import os
 
-    log.info(f"/tools/exec <- {request.command!r} cwd={request.cwd or '.'}")
+    _validate_tool_command(request.command)
+    resolved_cwd = _resolve_tool_cwd(request.cwd) or os.getcwd()
+
+    log.info(f"/tools/exec <- {request.command!r} cwd={resolved_cwd}")
     t0 = time.perf_counter()
     proc = await asyncio.create_subprocess_shell(
         request.command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        cwd=request.cwd or os.getcwd(),
+        cwd=resolved_cwd,
     )
     try:
         stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=request.timeout)
@@ -839,7 +1252,7 @@ async def tools_exec(request: ToolExecRequest) -> ToolExecResponse:
 
 @app.post("/generate", response_model=GenerateResponse)
 async def generate(request: GenerateRequest) -> GenerateResponse:
-    model = request.model or _STATE["emma"]
+    model = request.model or _STATE.emma
     try:
         raw = await client.generate(
             model=model,

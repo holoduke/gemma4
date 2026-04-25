@@ -11,7 +11,21 @@ class OllamaError(Exception):
 
 class OllamaClient:
     def __init__(self, host: str, timeout: int):
-        self._client = httpx.AsyncClient(base_url=host, timeout=timeout)
+        # `timeout` is treated as the per-request CEILING. We override the
+        # READ timeout to None: large reasoning models in think mode can sit
+        # silent for 30+ s between streamed tokens, and a fixed read timeout
+        # would kill the SSE connection mid-thought (manifests as
+        # "network error" in the browser). Connect/write/pool stay finite
+        # so a wedged daemon still surfaces quickly.
+        self._client = httpx.AsyncClient(
+            base_url=host,
+            timeout=httpx.Timeout(
+                connect=10.0,
+                read=None,
+                write=float(timeout),
+                pool=10.0,
+            ),
+        )
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -58,7 +72,12 @@ class OllamaClient:
         if tools:
             payload["tools"] = tools
         async with self._client.stream("POST", "/api/chat", json=payload) as response:
-            _raise_for_status(response)
+            if response.is_error:
+                # Streaming responses don't have .text populated until you
+                # explicitly read the body; doing it inline gives a real
+                # error message instead of `httpx.ResponseNotRead`.
+                body = (await response.aread()).decode("utf-8", errors="replace")
+                raise OllamaError(f"Ollama {response.status_code}: {body[:500]}")
             async for line in response.aiter_lines():
                 if line:
                     yield line
@@ -80,6 +99,36 @@ class OllamaClient:
 
     async def list_models(self) -> dict:
         return await self._get_json("/api/tags")
+
+    async def list_resident(self) -> list[dict]:
+        """Models currently loaded in the daemon (vs. just installed on disk)."""
+        try:
+            data = await self._get_json("/api/ps")
+        except Exception:
+            return []
+        return data.get("models", []) or []
+
+    async def unload(self, model: str) -> None:
+        """Force the daemon to evict a loaded model immediately by issuing
+        a zero-token generate with keep_alive=0. Used to free unified
+        memory before loading a heavy diffusion pipe."""
+        payload = {
+            "model": model,
+            "prompt": "",
+            "stream": False,
+            "keep_alive": 0,
+        }
+        try:
+            await self._post_json("/api/generate", payload)
+        except Exception:
+            pass  # best-effort; unload errors should never break the caller
+
+    async def unload_all(self) -> int:
+        """Unload every model currently resident in the daemon. Returns count."""
+        resident = await self.list_resident()
+        for m in resident:
+            await self.unload(m.get("name") or m.get("model"))
+        return len(resident)
 
     async def _post_json(self, path: str, payload: dict) -> dict:
         response = await self._client.post(path, json=payload)

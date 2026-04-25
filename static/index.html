@@ -85,8 +85,22 @@
               <span>INPAINT</span>
               <select id="select-inpaint"></select>
             </label>
+            <label class="model-select">
+              <span>PAINT</span>
+              <select id="select-txt2img" title="Text-to-image generator (used by /image and the generate_image tool)"></select>
+            </label>
+            <label class="auto-approve" id="auto-approve-wrap" title="Skip the APPROVE/DENY card and run tool calls immediately. Only takes effect when TOOLS is on.">
+              <input type="checkbox" id="auto-approve">
+              <span>AUTO-APPROVE</span>
+            </label>
+            <button type="button" id="mem-purge" class="mem-purge" title="Force-evict every model resident in Ollama and our process. Free unified memory before a heavy task.">PURGE MEM</button>
           </div>
           <div class="model" id="model-name">--</div>
+          <div class="bar-stats" aria-label="system telemetry">
+            <span class="bar-stat" title="CPU %"><span class="k">CPU</span><b id="s-cpu-inline">--</b></span>
+            <span class="bar-stat" title="Memory used / total"><span class="k">MEM</span><b id="s-mem-inline">--</b></span>
+            <span class="bar-stat" title="Ollama RSS"><span class="k">RSS</span><b id="s-rss-inline">--</b></span>
+          </div>
         </div>
         <div class="bar-line bar-line-res">
           <label class="model-select">
@@ -136,6 +150,38 @@
           </label>
         </div>
       </header>
+
+      <aside id="sessions-pane" class="sessions-pane" aria-label="chat sessions">
+        <div class="sessions-head">
+          <span class="sessions-title">// SESSIONS</span>
+          <button type="button" id="session-new" class="session-new" title="Start a fresh chat (Ctrl+N)">+ NEW</button>
+        </div>
+        <ul id="sessions-list" class="sessions-list"></ul>
+
+        <div class="sessions-head mcp-head">
+          <span class="sessions-title">// MCP SERVERS</span>
+          <button type="button" id="mcp-add-toggle" class="session-new" title="Connect a Model Context Protocol server (adds its tools to the LLM)">+ ADD</button>
+        </div>
+        <ul id="mcp-list" class="sessions-list mcp-list"></ul>
+      </aside>
+
+      <dialog id="mcp-add-dialog" class="mcp-dialog">
+        <form id="mcp-add-form" method="dialog" class="mcp-add-form">
+          <div class="mcp-dialog-head">// CONNECT MCP SERVER</div>
+          <label class="mcp-field">
+            <span>NAME</span>
+            <input id="mcp-add-name" type="text" placeholder="e.g. sunnycars" required maxlength="60" autocomplete="off">
+          </label>
+          <label class="mcp-field">
+            <span>URL</span>
+            <input id="mcp-add-url" type="url" placeholder="https://…" required maxlength="500" autocomplete="off">
+          </label>
+          <div class="mcp-add-actions">
+            <button type="submit" class="session-new">CONNECT</button>
+            <button type="button" id="mcp-add-cancel" class="session-new mcp-cancel">CANCEL</button>
+          </div>
+        </form>
+      </dialog>
 
       <section id="log" class="log" aria-live="polite"></section>
 
@@ -308,6 +354,6 @@
       </form>
     </main>
 
-    <script src="/static/app.js"></script>
+    <script type="module" src="/static/js/main.js"></script>
   </body>
 </html>
